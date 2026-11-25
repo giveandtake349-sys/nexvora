@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 import { NEON_AUTH_NOT_CONFIGURED_MESSAGE } from "@/lib/db/config";
 import { SCOPE_LABELS, type PermissionScope } from "@/lib/permissions";
@@ -30,9 +31,11 @@ export function Wordmark() {
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "gold" | "ghost" | "danger" | "outline";
+  /** When set, renders a real link styled as a button (never a <button> nested inside an <a> — that markup is invalid and taps on it do nothing on mobile browsers). */
+  href?: string;
 };
 
-export function Button({ variant = "primary", className = "", ...props }: ButtonProps) {
+export function Button({ variant = "primary", className = "", href, ...props }: ButtonProps) {
   const base =
     "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40";
   const styles: Record<string, string> = {
@@ -43,7 +46,15 @@ export function Button({ variant = "primary", className = "", ...props }: Button
     outline:
       "bg-transparent text-[#E8F0EE] border border-[#1E2D38] hover:border-[#00E5A8] hover:text-[#00E5A8]",
   };
-  return <button className={`${base} ${styles[variant]} ${className}`} {...props} />;
+  const cls = `${base} ${styles[variant]} ${className}`;
+  if (href) {
+    return (
+      <Link href={href} className={cls}>
+        {props.children}
+      </Link>
+    );
+  }
+  return <button className={cls} {...props} />;
 }
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {

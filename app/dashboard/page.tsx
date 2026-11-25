@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { getDashboardData } from "@/lib/dashboard-data";
 import { isDeviceOnline } from "@/lib/device";
 import { Badge, Button, Card, ConfigNotice, EmptyState, PageHeader } from "@/components/ui";
@@ -25,9 +24,7 @@ export default async function DashboardPage() {
         <PageHeader title="Overview" subtitle="Your devices, requests and sessions at a glance." />
         <EmptyState title="Sign in required" body="Please sign in to see your dashboard." />
         <div className="mt-4">
-          <Link href="/login">
-            <Button>Sign in</Button>
-          </Link>
+          <Button href="/login">Sign in</Button>
         </div>
       </div>
     );
@@ -82,9 +79,9 @@ export default async function DashboardPage() {
             </ul>
           )}
           <div className="mt-4">
-            <Link href="/dashboard/requests">
-              <Button variant="outline">Review requests</Button>
-            </Link>
+            <Button variant="outline" href="/dashboard/requests">
+              Review requests
+            </Button>
           </div>
         </Card>
         <Card>
@@ -102,12 +99,12 @@ export default async function DashboardPage() {
             </ul>
           )}
           <div className="mt-4 flex gap-2">
-            <Link href="/dashboard/devices">
-              <Button variant="outline">My Devices</Button>
-            </Link>
-            <Link href="/dashboard/connect">
-              <Button variant="outline">Connect a device</Button>
-            </Link>
+            <Button variant="outline" href="/dashboard/devices">
+              My Devices
+            </Button>
+            <Button variant="outline" href="/dashboard/connect">
+              Connect a device
+            </Button>
           </div>
         </Card>
       </div>

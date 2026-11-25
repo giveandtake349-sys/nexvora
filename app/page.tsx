@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { Badge, Button, Card, Wordmark } from "@/components/ui";
 import { PERMISSION_SCOPES, SCOPE_LABELS } from "@/lib/permissions";
 import { isAuthConfigured, isDatabaseConfigured } from "@/lib/db/config";
@@ -37,12 +36,10 @@ export default function Home() {
       <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
         <Wordmark />
         <nav className="flex items-center gap-3">
-          <Link href="/login">
-            <Button variant="ghost">Sign in</Button>
-          </Link>
-          <Link href="/register">
-            <Button>Get started</Button>
-          </Link>
+          <Button variant="ghost" href="/login">
+            Sign in
+          </Button>
+          <Button href="/register">Get started</Button>
         </nav>
       </header>
 
@@ -58,14 +55,12 @@ export default function Home() {
             the owner in control at every step.
           </p>
           <div className="mt-8 flex items-center justify-center gap-3">
-            <Link href="/register">
-              <Button className="px-6 py-3 text-base">Create your account</Button>
-            </Link>
-            <Link href="/dashboard">
-              <Button variant="outline" className="px-6 py-3 text-base">
-                Open dashboard
-              </Button>
-            </Link>
+            <Button href="/register" className="px-6 py-3 text-base">
+              Create your account
+            </Button>
+            <Button href="/dashboard" variant="outline" className="px-6 py-3 text-base">
+              Open dashboard
+            </Button>
           </div>
           {!configured && (
             <p className="mx-auto mt-6 max-w-xl rounded-xl border border-[#D4AF37]/40 bg-[#D4AF37]/10 px-4 py-3 text-sm text-[#E8F0EE]">

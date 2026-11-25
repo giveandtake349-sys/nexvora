@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { getDashboardData } from "@/lib/dashboard-data";
 import {
   PERMISSION_SCOPES,
@@ -59,9 +58,9 @@ export default async function RemoteAccessPage() {
                   </p>
                 )}
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <Link href="/dashboard/connect">
-                    <Button variant="outline">Request Access</Button>
-                  </Link>
+                  <Button variant="outline" href="/dashboard/connect">
+                    Request Access
+                  </Button>
                   {granted && grant && (
                     <RevokePermissionButton permissionId={grant.id} scope={SCOPE_LABELS[scope]} />
                   )}
