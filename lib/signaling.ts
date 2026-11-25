@@ -133,10 +133,19 @@ export function canTransitionSignalingState(
 /* Heartbeats                                                          */
 /* ------------------------------------------------------------------ */
 
-/** A peer is considered alive if it heartbeated within the last 30s.
- *  Clients should heartbeat every ~10s (3x margin for one missed beat
- *  plus serverless cold-start jitter). */
-export const HEARTBEAT_STALE_AFTER_MS = 30 * 1000;
+/** A peer is considered alive if it heartbeated within the last 90s.
+ *  Clients heartbeat every ~10s and poll every ~2s (a poll also
+ *  stamps the caller's heartbeat — it is proof of life). The 90s
+ *  window is deliberate, not loose: a hidden/background tab's timers
+ *  are throttled by the browser to ~once a minute, so a 30s window
+ *  falsely reported a live peer as "not seen" whenever the peer's
+ *  window lost focus — exactly what happened live on Nov 25 2026
+ *  (Bob's window went to the background while Alice's tab was
+ *  inspected, and Alice never saw Bob although Bob was joined and
+ *  heartbeating). 90s covers one throttled beat plus jitter. The
+ *  trade-off is that a peer that truly vanished takes up to ~90s to
+ *  be declared gone instead of ~30s. */
+export const HEARTBEAT_STALE_AFTER_MS = 90 * 1000;
 export const HEARTBEAT_INTERVAL_MS = 10 * 1000;
 
 export function isHeartbeatStale(

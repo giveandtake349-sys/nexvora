@@ -600,3 +600,103 @@ export function nextPollDelayMs(consecutiveFailures: number): number {
   const delay = LIVE_POLL_BASE_MS * 2 ** consecutiveFailures;
   return Math.min(delay, LIVE_POLL_MAX_BACKOFF_MS);
 }
+
+/* ------------------------------------------------------------------ */
+/* Offer negotiation gate — one offer in flight, none lost             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * What one negotiation attempt reports back to the gate.
+ * - "negotiated": an offer was created, set as the local description
+ *   and sent. The peer connection is now awaiting an answer.
+ * - "not-stable": the peer connection is mid-handshake
+ *   (have-local-offer / have-remote-offer), so no offer may be
+ *   created right now. The need is remembered, not dropped.
+ * - "failed": the attempt itself errored (createOffer /
+ *   setLocalDescription / send threw, or the peer connection was
+ *   replaced mid-flight). The need is remembered unless the caller
+ *   says otherwise.
+ */
+export type NegotiationOutcome = "negotiated" | "not-stable" | "failed";
+
+/**
+ * Serialises offer creation for ONE RTCPeerConnection.
+ *
+ * ROOT CAUSE (live bug, Nov 25 2026 — reproduced 5/5 in headless
+ * Chrome): `onnegotiationneeded` fires when the data channels are
+ * created at peer-connection setup, and `boot()` ALSO creates an
+ * offer explicitly. Both paths check `signalingState === "stable"`
+ * and both call `createOffer()` while the state is still "stable"
+ * (the first `setLocalDescription` has not run yet), so TWO offers
+ * are created concurrently. The first `setLocalDescription` wins;
+ * the second throws exactly:
+ *   "Failed to execute 'setLocalDescription' on 'RTCPeerConnection':
+ *    Failed to set local offer sdp: The order of m-lines in
+ *    subsequent offer doesn't match order from previous
+ *    offer/answer."
+ * The losing call then surfaced as "Could not create an offer" and
+ * flipped the phase to failed, while the winning offer's handshake
+ * still needed an answer — the session never went live.
+ *
+ * The gate fixes this without touching signaling: at most one
+ * attempt runs at a time. A request that arrives while one is in
+ * flight is remembered (`pending`) and retried once the in-flight
+ * attempt finishes; a request that finds the connection mid-handshake
+ * ("not-stable") is likewise remembered and retried via `drain()`,
+ * which the caller invokes after applying a remote answer — the
+ * moment the connection is stable again. Nothing is ever dropped
+ * silently, and no second offer can be created while one is pending.
+ */
+export class NegotiationGate {
+  private busy = false;
+  private pending = false;
+
+  /**
+   * Request one negotiation attempt. If another attempt is running,
+   * the request is remembered and retried automatically when it
+   * finishes — the caller never has to re-request.
+   */
+  async request(attempt: () => Promise<NegotiationOutcome>): Promise<void> {
+    if (this.busy) {
+      this.pending = true;
+      return;
+    }
+    this.busy = true;
+    try {
+      for (;;) {
+        const outcome = await attempt();
+        if (outcome === "negotiated" && this.pending) {
+          // A change arrived while we worked (e.g. a track was
+          // added): negotiate again for it — but only once per
+          // remembered request, so this loop always terminates.
+          this.pending = false;
+          continue;
+        }
+        if (outcome === "not-stable") this.pending = true;
+        return;
+      }
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  /**
+   * Retry a remembered negotiation now that the connection is stable
+   * again — call after applying a remote answer. No-op when nothing
+   * is pending or an attempt is already running (its loop picks the
+   * pending request up).
+   */
+  drain(attempt: () => Promise<NegotiationOutcome>): void {
+    if (!this.pending || this.busy) return;
+    this.pending = false;
+    void this.request(attempt);
+  }
+
+  /** Forget everything (peer connection torn down / retry / unmount).
+   *  An attempt already in flight finishes harmlessly — it checks
+   *  that its peer connection is still current before touching it. */
+  reset(): void {
+    this.busy = false;
+    this.pending = false;
+  }
+}

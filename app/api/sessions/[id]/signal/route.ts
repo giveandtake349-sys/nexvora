@@ -6,6 +6,7 @@ import {
   SIGNAL_POLL_INTERVAL_MS,
   SIGNAL_POLL_MAX_MESSAGES,
   callerHasLiveGrant,
+  heartbeatColumnFor,
   loadSessionForParty,
   otherPartyId,
   parseSignalAfter,
@@ -124,7 +125,12 @@ export async function POST(
  * GET /api/sessions/[id]/signal?after=<seq> — short-poll for messages
  * addressed to the caller with seq > after, oldest first (max 100).
  * Also returns the current signaling_state, the peer's heartbeat
- * freshness, and whether the caller's grant is still valid.
+ * freshness, and whether the caller's grant is still valid. A
+ * successful poll also stamps the caller's own heartbeat column —
+ * polling every ~2s is itself proof the caller is alive, so peer
+ * presence no longer depends solely on the separate 10s heartbeat
+ * (which a background tab's throttled timers can delay past the
+ * staleness window).
  *
  * Grant validity is re-checked on delivery too: a party whose grant
  * is gone gets 403 and no messages — never a stale handshake for a
@@ -187,6 +193,25 @@ export async function GET(
      limit $4`,
     [id, user.id, after.after, SIGNAL_POLL_MAX_MESSAGES],
   );
+  // A successful poll IS proof of life: stamp the caller's heartbeat
+  // column so peer presence follows the 2s poll cadence, not only the
+  // 10s heartbeat interval. A poll that fails (or a caller whose
+  // grant is gone — handled above) never stamps anything. The update
+  // is best-effort: if it fails, the poll still returns its messages
+  // and the dedicated heartbeat endpoint remains the other source.
+  const column = heartbeatColumnFor(session, user.id);
+  if (column) {
+    const now = new Date().toISOString();
+    await db
+      .query(
+        `update public.remote_sessions set ${column} = $1 where id = $2`,
+        [now, id],
+      )
+      .catch(() => {
+        // Presence staleness degrades to the heartbeat interval;
+        // the poll result itself is unaffected.
+      });
+  }
   const peer = peerHeartbeat(session, user.id);
   return NextResponse.json({
     ok: true,

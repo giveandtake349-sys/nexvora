@@ -12,6 +12,7 @@ import {
   LIVE_POLL_BASE_MS,
   LIVE_POLL_MAX_BACKOFF_MS,
   RTC_CONFIGURATION,
+  NegotiationGate,
   canPlayRemoteAudio,
   canPublishTrack,
   canShareLocation,
@@ -22,6 +23,7 @@ import {
   nextPollDelayMs,
   parseControlMessage,
   transitionLivePhase,
+  type NegotiationOutcome,
 } from "../webrtc";
 import { FILE_CHANNEL_NAME } from "../file-transfer";
 
@@ -332,5 +334,93 @@ describe("grant model for publishing tracks", () => {
     expect(canUseRemoteInteraction(["remote_interaction"], false)).toBe(true);
     expect(canShareNotifications(["notifications"], false)).toBe(true);
     expect(canShareNotifications(["file_transfer"], false)).toBe(false);
+  });
+});
+
+describe("offer negotiation gate — one offer in flight, none lost", () => {
+  // Regression test for the live bug of Nov 25 2026: onnegotiationneeded
+  // (fired by createDataChannel at setup) raced boot()'s explicit
+  // createOffer, so two createOffer() calls ran concurrently while
+  // signalingState was still "stable" — the second setLocalDescription
+  // threw "The order of m-lines in subsequent offer doesn't match
+  // order from previous offer/answer" and the session never went live.
+  // The gate serialises attempts; a request that arrives while one is
+  // running is remembered and retried — never dropped, never parallel.
+  it("serialises concurrent requests: attempts never overlap, requests coalesce into one re-run", async () => {
+    const gate = new NegotiationGate();
+    let running = 0;
+    let maxRunning = 0;
+    let calls = 0;
+    const attempt = async (): Promise<NegotiationOutcome> => {
+      calls++;
+      running++;
+      maxRunning = Math.max(maxRunning, running);
+      await new Promise((r) => setTimeout(r, 10));
+      running--;
+      return "negotiated";
+    };
+    await Promise.all([gate.request(attempt), gate.request(attempt), gate.request(attempt)]);
+    expect(maxRunning).toBe(1);
+    // Three requests, two runs: the first runs immediately, the two
+    // concurrent ones coalesce into a single re-run (the re-run's
+    // offer reflects the current peer-connection state, which already
+    // includes every change both requests stood for).
+    expect(calls).toBe(2);
+  });
+
+  it("a not-stable attempt is remembered and retried by drain()", async () => {
+    const gate = new NegotiationGate();
+    let calls = 0;
+    const attempt = async (): Promise<NegotiationOutcome> => {
+      calls++;
+      return calls === 1 ? "not-stable" : "negotiated";
+    };
+    await gate.request(attempt);
+    expect(calls).toBe(1);
+    gate.drain(attempt);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(calls).toBe(2);
+  });
+
+  it("drain() is a no-op when nothing is pending", async () => {
+    const gate = new NegotiationGate();
+    let calls = 0;
+    const attempt = async (): Promise<NegotiationOutcome> => {
+      calls++;
+      return "negotiated";
+    };
+    await gate.request(attempt);
+    gate.drain(attempt);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(calls).toBe(1);
+  });
+
+  it("a failed attempt does not loop on its own", async () => {
+    const gate = new NegotiationGate();
+    let calls = 0;
+    const attempt = async (): Promise<NegotiationOutcome> => {
+      calls++;
+      return "failed";
+    };
+    await gate.request(attempt);
+    expect(calls).toBe(1);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(calls).toBe(1);
+  });
+
+  it("reset() forgets a pending request (teardown / retry)", async () => {
+    const gate = new NegotiationGate();
+    let calls = 0;
+    const slow = async (): Promise<NegotiationOutcome> => {
+      calls++;
+      await new Promise((r) => setTimeout(r, 20));
+      return "negotiated";
+    };
+    const first = gate.request(slow);
+    await gate.request(slow); // queued as pending while the first runs
+    gate.reset();
+    await first;
+    await new Promise((r) => setTimeout(r, 30));
+    expect(calls).toBe(1); // the pending re-run was forgotten by reset
   });
 });

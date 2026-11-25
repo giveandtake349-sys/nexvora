@@ -14,6 +14,7 @@ import {
   CONTROL_CHANNEL_NAME,
   LIVE_PHASE_LABELS,
   RTC_CONFIGURATION,
+  NegotiationGate,
   canPlayRemoteAudio,
   canPublishTrack,
   canShareLocation,
@@ -26,6 +27,7 @@ import {
   type LivePhase,
   type LivePhaseEvent,
   type MediaTrackKind,
+  type NegotiationOutcome,
 } from "@/lib/webrtc";
 import {
   FILE_BUFFERED_AMOUNT_HIGH_WATERMARK,
@@ -204,6 +206,7 @@ export default function LiveSession({
   const sendersRef = useRef(new Map<MediaTrackKind, RTCRtpSender>());
   const trackKindByIdRef = useRef(new Map<string, MediaTrackKind>());
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
+  const negotiationGateRef = useRef(new NegotiationGate());
   const wasLiveRef = useRef(false);
   const micMutedRef = useRef(false);
   const cameraOffRef = useRef(false);
@@ -302,6 +305,7 @@ export default function LiveSession({
   }
 
   function teardownSession(): void {
+    negotiationGateRef.current.reset();
     pollerRef.current?.stop();
     pollerRef.current = null;
     if (heartbeatRef.current !== null) {
@@ -340,6 +344,7 @@ export default function LiveSession({
   }
 
   function teardownPeerOnly(): void {
+    negotiationGateRef.current.reset();
     if (fileChannelRef.current) {
       try {
         fileChannelRef.current.close();
@@ -924,24 +929,42 @@ export default function LiveSession({
     }
   }
 
-  async function createAndSendOffer(): Promise<void> {
+  /**
+   * One offer attempt, run exclusively through the negotiation gate.
+   * The pc is captured up front and re-checked after every await:
+   * if a retry/teardown replaced the peer connection mid-flight, the
+   * attempt aborts instead of negotiating on a dead connection.
+   */
+  async function attemptOffer(): Promise<NegotiationOutcome> {
     const pc = pcRef.current;
     const client = clientRef.current;
-    if (!pc || !client || pc.signalingState !== "stable") return;
+    if (!pc || !client) return "failed";
+    if (pc.signalingState !== "stable") return "not-stable";
     try {
       const offer = await pc.createOffer();
+      if (pcRef.current !== pc) return "failed";
       await pc.setLocalDescription(offer);
+      if (pcRef.current !== pc) return "failed";
       await client.send("offer", { type: offer.type, sdp: offer.sdp });
       applyPhase("offer-sent");
+      return "negotiated";
     } catch (err) {
+      if (pcRef.current !== pc) return "failed";
       setDetail(`Could not create an offer: ${err instanceof Error ? err.message : "unknown error"}`);
       applyPhase("error");
+      return "failed";
     }
   }
 
+  async function createAndSendOffer(): Promise<void> {
+    await negotiationGateRef.current.request(attemptOffer);
+  }
+
   async function renegotiate(): Promise<void> {
-    const pc = pcRef.current;
-    if (!pc || pc.signalingState !== "stable") return;
+    // No signaling-state check here on purpose: the gate remembers
+    // the request when the connection is mid-handshake and retries
+    // it once an answer lands (see the "answer" handler's drain).
+    // Checking here would silently drop the renegotiation.
     await createAndSendOffer();
   }
 
@@ -985,6 +1008,11 @@ export default function LiveSession({
             await pc.setRemoteDescription(new RTCSessionDescription(message.payload));
             await flushPendingIce();
           }
+          // The connection is stable again: if a renegotiation was
+          // requested while our offer was in flight, run it now.
+          // Without this, a track added mid-handshake would never be
+          // negotiated (the request was remembered, not dropped).
+          negotiationGateRef.current.drain(attemptOffer);
           break;
         }
         case "ice-candidate": {
@@ -1155,6 +1183,7 @@ export default function LiveSession({
     }
     setDetail(null);
     wasLiveRef.current = false;
+    negotiationGateRef.current.reset();
     const client = createSignalingClient(sessionId);
     clientRef.current = client;
     applyPhase("begin");

@@ -141,9 +141,9 @@ describe("signaling-state transitions", () => {
   });
 });
 
-describe("heartbeat staleness (30s threshold)", () => {
-  it("is 30 seconds", () => {
-    expect(HEARTBEAT_STALE_AFTER_MS).toBe(30_000);
+describe("heartbeat staleness (90s threshold)", () => {
+  it("is 90 seconds — tolerates a background tab's ~1/min throttled timers", () => {
+    expect(HEARTBEAT_STALE_AFTER_MS).toBe(90_000);
   });
 
   it("a missing heartbeat is stale", () => {
@@ -151,10 +151,10 @@ describe("heartbeat staleness (30s threshold)", () => {
     expect(isHeartbeatStale("not-a-date")).toBe(true);
   });
 
-  it("a heartbeat 10s ago is fresh, 31s ago is stale", () => {
+  it("a heartbeat 55s ago is fresh (one throttled beat), 91s ago is stale", () => {
     const now = new Date("2026-11-25T12:00:30.000Z");
-    expect(isHeartbeatStale("2026-11-25T12:00:20.000Z", now)).toBe(false);
-    expect(isHeartbeatStale("2026-11-25T11:59:59.000Z", now)).toBe(true);
+    expect(isHeartbeatStale("2026-11-25T11:59:35.000Z", now)).toBe(false);
+    expect(isHeartbeatStale("2026-11-25T11:58:59.000Z", now)).toBe(true);
   });
 });
 
@@ -197,11 +197,11 @@ describe("per-party heartbeats and recipient resolution", () => {
     const now = new Date("2026-11-25T12:00:30.000Z");
     const session = fakeSession({
       owner_last_heartbeat_at: "2026-11-25T12:00:25.000Z", // fresh
-      participant_last_heartbeat_at: "2026-11-25T11:59:00.000Z", // stale
+      participant_last_heartbeat_at: "2026-11-25T11:58:30.000Z", // stale (120s)
     });
     // Owner asking: peer is the participant (stale).
     expect(peerHeartbeat(session, "owner-1", now)).toEqual({
-      peer_last_seen_at: "2026-11-25T11:59:00.000Z",
+      peer_last_seen_at: "2026-11-25T11:58:30.000Z",
       peer_alive: false,
     });
     // Participant asking: peer is the owner (fresh).
