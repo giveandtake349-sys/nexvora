@@ -6,6 +6,9 @@ import type { ReactNode } from "react";
 import { authClient } from "@/lib/auth/client";
 import { Button, Wordmark } from "./ui";
 
+const APK_URL =
+  "https://l4olg2qubqwtv2jv.public.blob.vercel-storage.com/NEXVORA-v0.1.0.apk";
+
 const NAV = [
   { href: "/dashboard", label: "Overview" },
   { href: "/dashboard/devices", label: "My Devices" },
@@ -64,6 +67,14 @@ export default function DashboardShell({
         </nav>
         <div className="mt-auto pt-6">
           <p className="truncate text-xs text-[#8FA3A0]">{userEmail ?? "Not signed in"}</p>
+          <a
+            href={APK_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-3 flex w-full items-center justify-center rounded-[14px] bg-[#00E5A8] px-3 py-2.5 text-sm font-semibold text-[#062018] transition hover:bg-[#33ecb8] active:scale-[0.98]"
+          >
+            Download App
+          </a>
           <Button variant="outline" className="mt-3 w-full" onClick={signOut}>
             Sign out
           </Button>
@@ -71,13 +82,23 @@ export default function DashboardShell({
       </aside>
 
       {/* Mobile top bar */}
-      <header className="glass sticky top-0 z-30 flex items-center justify-between border-b border-white/10 px-4 py-3 lg:hidden">
+      <header className="glass sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-white/10 px-4 py-3 lg:hidden">
         <Link href="/dashboard">
           <Wordmark />
         </Link>
-        <Button variant="ghost" onClick={signOut}>
-          Sign out
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          <a
+            href={APK_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center rounded-full bg-[#00E5A8] px-3 py-2 text-xs font-bold text-[#062018] transition hover:bg-[#33ecb8] active:scale-[0.97]"
+          >
+            Download App
+          </a>
+          <Button variant="ghost" onClick={signOut}>
+            Sign out
+          </Button>
+        </div>
       </header>
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 pb-24 sm:px-6 lg:pb-8 lg:pt-8">{children}</main>
