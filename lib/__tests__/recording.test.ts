@@ -1,14 +1,16 @@
 /**
  * Session recording v1 unit tests — pure logic only, no browser.
- * Covers: the owner-consent state machine, track picking, mime-type
- * selection, chunk assembly, duration/size formatting, file naming,
- * and the 1-hour auto-stop cap.
+ * Covers: the one-time grant gate (canRecord), the recording state
+ * machine, track picking, mime-type selection, chunk assembly,
+ * duration/size formatting, file naming, and the 1-hour auto-stop
+ * cap.
  */
 import { describe, it, expect } from "vitest";
 import {
   MAX_RECORDING_DURATION_MS,
   RECORDING_CHUNK_TIMESLICE_MS,
   assembleRecordingBlob,
+  canRecord,
   formatRecordingDuration,
   formatRecordingSize,
   hasRecordableTrack,
@@ -16,62 +18,61 @@ import {
   pickRecordingTracks,
   recordingFileName,
   shouldAutoStopRecording,
-  transitionRecordingConsent,
-  type RecordingConsentState,
+  transitionRecordingState,
+  type RecordingState,
 } from "../recording";
+import type { PermissionScope } from "../permissions";
 
 const live = { readyState: "live" };
 const ended = { readyState: "ended" };
 
-describe("recording consent state machine", () => {
-  it("participant: idle -> requested -> recording on approval", () => {
-    let state: RecordingConsentState = "idle";
-    state = transitionRecordingConsent(state, "request");
-    expect(state).toBe("requested");
-    state = transitionRecordingConsent(state, "approve-received");
+describe("recording grant gate — the one-time pairing grant covers it", () => {
+  it("the device owner may always record", () => {
+    expect(canRecord([], true)).toBe(true);
+    expect(canRecord(["file_transfer"], true)).toBe(true);
+  });
+
+  it("a participant with any live media grant may record", () => {
+    expect(canRecord(["screen"], false)).toBe(true);
+    expect(canRecord(["camera"], false)).toBe(true);
+    expect(canRecord(["microphone"], false)).toBe(true);
+    expect(canRecord(["screen", "file_transfer", "location"], false)).toBe(true);
+  });
+
+  it("a participant with only non-media grants may not record", () => {
+    expect(canRecord([], false)).toBe(false);
+    expect(canRecord(["file_transfer"], false)).toBe(false);
+    expect(canRecord(["location"], false)).toBe(false);
+    expect(canRecord(["speaker"], false)).toBe(false);
+    expect(canRecord(["notifications"], false)).toBe(false);
+    expect(canRecord(["remote_interaction"], false)).toBe(false);
+    expect(
+      canRecord(
+        ["file_transfer", "location", "speaker", "notifications", "remote_interaction"] as PermissionScope[],
+        false,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("recording state machine", () => {
+  it("idle -> recording on start, recording -> stopped on stop, stopped -> idle on reset", () => {
+    let state: RecordingState = "idle";
+    state = transitionRecordingState(state, "start");
     expect(state).toBe("recording");
-    state = transitionRecordingConsent(state, "stop");
+    state = transitionRecordingState(state, "stop");
     expect(state).toBe("stopped");
-    state = transitionRecordingConsent(state, "reset");
+    state = transitionRecordingState(state, "reset");
     expect(state).toBe("idle");
   });
 
-  it("participant: decline ends in declined, then a fresh request is allowed", () => {
-    let state: RecordingConsentState = "idle";
-    state = transitionRecordingConsent(state, "request");
-    state = transitionRecordingConsent(state, "decline-received");
-    expect(state).toBe("declined");
-    state = transitionRecordingConsent(state, "request");
-    expect(state).toBe("requested");
-  });
-
-  it("participant: cancel and owner revoke both drop a pending request", () => {
-    expect(transitionRecordingConsent("requested", "stop")).toBe("idle");
-    expect(transitionRecordingConsent("requested", "revoke-received")).toBe("idle");
-  });
-
-  it("owner: idle -> pending on request, approve/decline returns to idle", () => {
-    expect(transitionRecordingConsent("idle", "request-received")).toBe("pending");
-    expect(transitionRecordingConsent("pending", "approve")).toBe("idle");
-    expect(transitionRecordingConsent("pending", "decline")).toBe("idle");
-  });
-
-  it("owner: self-start goes straight to recording", () => {
-    expect(transitionRecordingConsent("idle", "start")).toBe("recording");
-  });
-
-  it("revoke mid-recording stops immediately", () => {
-    expect(transitionRecordingConsent("recording", "revoke-received")).toBe("stopped");
-  });
-
   it("ignores events that do not belong to the current state", () => {
-    expect(transitionRecordingConsent("idle", "approve-received")).toBe("idle");
-    expect(transitionRecordingConsent("idle", "stop")).toBe("idle");
-    expect(transitionRecordingConsent("requested", "start")).toBe("requested");
-    expect(transitionRecordingConsent("pending", "approve-received")).toBe("pending");
-    expect(transitionRecordingConsent("recording", "request")).toBe("recording");
-    expect(transitionRecordingConsent("stopped", "stop")).toBe("stopped");
-    expect(transitionRecordingConsent("declined", "approve-received")).toBe("declined");
+    expect(transitionRecordingState("idle", "stop")).toBe("idle");
+    expect(transitionRecordingState("idle", "reset")).toBe("idle");
+    expect(transitionRecordingState("recording", "start")).toBe("recording");
+    expect(transitionRecordingState("recording", "reset")).toBe("recording");
+    expect(transitionRecordingState("stopped", "start")).toBe("stopped");
+    expect(transitionRecordingState("stopped", "stop")).toBe("stopped");
   });
 });
 

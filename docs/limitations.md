@@ -85,11 +85,15 @@
   server and nothing is stored in Postgres. Clearing the browser's
   site data deletes the recordings, and a recording made in another
   browser never appears on the Recordings page.
-- **Owner consent is the gate.** A participant's recording starts
-  only after the device owner approves in-session; the owner can
-  revoke mid-recording and the recorder stops immediately. Both sides
-  see a REC indicator while recording is active. The recorder is the
-  viewer (controller) — it records the remote screen/camera +
+- **One-time grant is the gate (amended Nov 25).** No per-session owner
+  approval is asked for recording — the owner granted screen / camera /
+  microphone once at first pairing, and that grant covers recording.
+  The Record button starts right away when the session holds any live
+  media grant; the events route enforces the same "any-media" rule
+  server-side for the audit actions. Both sides see a REC indicator
+  while recording is active, and recording stops immediately when
+  access is revoked, the session ends, or the peer leaves. The recorder
+  is the viewer (controller) — it records the remote screen/camera +
   microphone it receives.
 - **Limits:** one video track only (screen preferred, camera
   fallback — MediaRecorder does not composite two video tracks);
@@ -97,7 +101,7 @@
   browser supports (vp9/opus → vp8/opus → vp9 → webm → default).
 - **Not live-verified:** the two-browser record → replay flow needs
   real devices (the cloud browser cannot establish a peer
-  connection). Unit tests cover the consent machine, track/mime
+  connection). Unit tests cover the grant gate, track/mime
   picks, the IndexedDB store, and the audit validation — not a live
   call.
 

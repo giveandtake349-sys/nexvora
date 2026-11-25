@@ -6,92 +6,87 @@
  * components/LiveSession.tsx (browser APIs cannot run in vitest);
  * this module holds everything that can be decided without a browser:
  *
- *   - the owner-consent state machine,
+ *   - the one-time grant gate (canRecord),
+ *   - the recording state machine (idle / recording / stopped),
  *   - which remote tracks go into the recording,
  *   - the MediaRecorder mime-type pick,
  *   - chunk assembly + display formatting.
  *
- * HARD CONSENT BOUNDARY (non-negotiable, same as every other live
- * feature): recording NEVER starts without the device owner's
- * explicit in-session approval. The participant requests over the
- * `nexvora-control` channel; the owner approves or declines; the
- * owner can revoke mid-recording and the recorder stops immediately.
- * The owner recording their own session is self-approved (they are
- * the approver). Both sides always see a visible REC indicator while
- * recording is active, and every start/stop is audit-logged
- * (recording.started / recording.stopped). Nothing is ever recorded
- * silently, and nothing is uploaded anywhere — v1 stores recordings
- * only in the viewer's browser (IndexedDB, lib/recordings.ts).
+ * GRANT MODEL (user decision, Nov 25 2026 — the one-time grant at
+ * pairing covers recording, same as every other live feature): NO
+ * per-session owner approval is asked for recording. The owner
+ * granted screen / camera / microphone once at first pairing, and
+ * that grant is the permission — the Record button starts right
+ * away. The guardrails that stay: both sides always see a visible
+ * REC indicator while recording is active; recording stops
+ * immediately when access is revoked, the session ends, or the peer
+ * leaves; every start/stop is audit-logged (recording.started /
+ * recording.stopped). Nothing is ever recorded silently, and nothing
+ * is uploaded anywhere — v1 stores recordings only in the viewer's
+ * browser (IndexedDB, lib/recordings.ts).
  */
 
+import type { PermissionScope } from "./permissions";
+
 /* ------------------------------------------------------------------ */
-/* Owner-consent state machine                                         */
+/* Grant gate — the one-time pairing grant covers recording            */
 /* ------------------------------------------------------------------ */
 
 /**
- * Consent states for MY side of a recording:
+ * May this side record the session? The device owner always may
+ * (they own the device). A participant may record when they hold a
+ * live grant for ANY of screen / camera / microphone — the same
+ * "any-media" rule the events route enforces server-side for the
+ * recording audit actions. No separate recording scope exists and
+ * no approval is asked again in-session: the grant was given once
+ * at pairing.
+ */
+export function canRecord(
+  grantedScopes: readonly PermissionScope[],
+  isOwner: boolean,
+): boolean {
+  if (isOwner) return true;
+  return (
+    grantedScopes.includes("screen") ||
+    grantedScopes.includes("camera") ||
+    grantedScopes.includes("microphone")
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Recording state machine                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Recording states for MY side:
  * - idle: nothing happening.
- * - requested: I (participant) asked the owner; waiting for an answer.
- * - pending: I (owner) received a request; waiting for my decision.
  * - recording: MediaRecorder is running on my side.
- * - declined: the owner declined my request.
  * - stopped: a recording ran and has now stopped (saved or failed).
  */
-export const RECORDING_CONSENT_STATES = [
-  "idle",
-  "requested",
-  "pending",
-  "recording",
-  "declined",
-  "stopped",
-] as const;
+export const RECORDING_STATES = ["idle", "recording", "stopped"] as const;
 
-export type RecordingConsentState = (typeof RECORDING_CONSENT_STATES)[number];
+export type RecordingState = (typeof RECORDING_STATES)[number];
 
-export type RecordingConsentEvent =
-  | "request" // participant: ask the owner (idle -> requested)
-  | "request-received" // owner: a request arrived (idle -> pending)
-  | "approve-received" // participant: the owner approved (requested -> recording)
-  | "decline-received" // participant: the owner declined (requested -> declined)
-  | "approve" // owner: approve the pending request (pending -> idle)
-  | "decline" // owner: decline the pending request (pending -> idle)
-  | "start" // owner self-start, already approved (idle -> recording)
-  | "stop" // recorder stops (recording -> stopped; requested -> idle = cancel)
-  | "revoke-received" // owner revoked mid-recording (recording -> stopped)
+export type RecordingEvent =
+  | "start" // start recording (idle -> recording)
+  | "stop" // recorder stops (recording -> stopped)
   | "reset"; // back to idle from a terminal state
 
 /**
- * Pure consent transitions. Anything not listed is ignored (returns
- * the current state) — a stray control message can never move the
+ * Pure recording transitions. Anything not listed is ignored
+ * (returns the current state) — a stray event can never move the
  * recorder into a state the UI cannot represent.
  */
-export function transitionRecordingConsent(
-  state: RecordingConsentState,
-  event: RecordingConsentEvent,
-): RecordingConsentState {
+export function transitionRecordingState(
+  state: RecordingState,
+  event: RecordingEvent,
+): RecordingState {
   switch (state) {
     case "idle":
-      if (event === "request") return "requested";
-      if (event === "request-received") return "pending";
       if (event === "start") return "recording";
       return state;
-    case "requested":
-      if (event === "approve-received") return "recording";
-      if (event === "decline-received") return "declined";
-      if (event === "stop") return "idle";
-      if (event === "revoke-received") return "idle";
-      if (event === "reset") return "idle";
-      return state;
-    case "pending":
-      if (event === "approve" || event === "decline") return "idle";
-      if (event === "reset") return "idle";
-      return state;
     case "recording":
-      if (event === "stop" || event === "revoke-received") return "stopped";
-      return state;
-    case "declined":
-      if (event === "request") return "requested";
-      if (event === "reset") return "idle";
+      if (event === "stop") return "stopped";
       return state;
     case "stopped":
       if (event === "reset") return "idle";

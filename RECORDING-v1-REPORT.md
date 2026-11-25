@@ -10,16 +10,18 @@ record the remote stream of a live session and replay it in-app.
   video as fallback, remote microphone audio — into a `.webm` file
   (1-second chunks, best supported mime: vp9/opus → vp8/opus → vp9 →
   webm → browser default). 1-hour auto-stop cap.
-- **Owner consent (hard gate):** the participant sends
-  `recording-request` over the `nexvora-control` channel; the owner
-  approves/declines in-session. The owner recording their own session
-  is self-approved. The owner can revoke mid-recording
-  (`recording-revoke`) and the recorder stops immediately. Both sides
-  always see a red REC indicator while recording is active. Audit:
+- **Grant gate (amended Nov 25, 20:35 — user decision):** NO per-session
+  owner approval for recording. The one-time grant the owner gave at
+  first pairing covers it: the Record button starts right away when
+  the session holds any live screen / camera / microphone grant
+  ("any-media" — the events route enforces the same rule server-side
+  for the audit actions; owner exempt). The old
+  `recording-request` / approve / decline / `recording-revoke`
+  handshake is removed. Both sides always see a red REC indicator
+  while recording is active, and recording stops immediately when
+  access is revoked, the session ends, or the peer leaves. Audit:
   `recording.started` / `recording.stopped` via
-  POST /api/sessions/[id]/events (new allowlist actions; the events
-  route gates recording actions on ANY live screen/camera/microphone
-  grant — "any-media" — owner exempt).
+  POST /api/sessions/[id]/events.
 - **Storage v1 — client-side only:** recordings are saved in the
   viewer's browser IndexedDB (`nexvora-recordings` DB, `recordings`
   store: metadata + Blob chunks). Nothing is uploaded, nothing is in
@@ -36,12 +38,13 @@ record the remote stream of a live session and replay it in-app.
 
 ## Files changed
 
-- New: `lib/recording.ts` (consent state machine, track picking, mime
+- New: `lib/recording.ts` (grant gate + state machine, track picking, mime
   pick, formatting), `lib/recordings.ts` (IndexedDB store),
   `components/RecordingsList.tsx`, `app/dashboard/recordings/page.tsx`,
   `lib/__tests__/recording.test.ts`,
   `lib/__tests__/recordings-store.test.ts`, `RECORDING-v1-REPORT.md`.
-- Edited: `lib/webrtc.ts` (7 control messages), `lib/live-features.ts`
+- Edited: `lib/webrtc.ts` (2 control messages: recording-started /
+  recording-stopped — the approval handshake is gone), `lib/live-features.ts`
   (2 audit actions + any-media scope), `app/api/sessions/[id]/events/route.ts`
   (any-media grant check), `components/LiveSession.tsx` (recording
   section + card + REC banner), `components/DashboardShell.tsx` (nav),
@@ -79,11 +82,27 @@ revoked, session ended). All 14 checks passed:
 
 ## Not verified (needs real devices)
 
-- A real two-browser recording: request → approve → record → stop →
+- A real two-browser recording: record → stop →
   replay. The cloud browser gathers zero ICE candidates, so a peer
-  connection cannot go live there. The consent handshake, the
+  connection cannot go live there. The grant gate, the
   MediaRecorder path, and the IndexedDB save are covered by unit
   tests only — not by a live call.
 - MediaRecorder mime support varies by browser; the vp9/opus-first
   pick falls back gracefully, but actual .webm playback quality was
   not checked on a real phone.
+
+## Amendment — no per-session approval (Nov 25, 20:35)
+
+User decision ("Owner er permission lagbe nah. Only first time
+sign-up e all permission hoye jabe"): the `recording-request` /
+approve / decline / `recording-revoke` handshake is removed. The
+Record button starts right away when the session holds any live
+screen / camera / microphone grant (the one-time pairing grant;
+`canRecord` in lib/recording.ts, "any-media" on the events route).
+Kept: red REC indicator on both sides, audit events, instant stop
+on grant revoke / session end / teardown / peer leave, 1-hour cap,
+IndexedDB storage, replay page. No new scope, no migration.
+Verification after the change: lint clean, build clean, 182 tests
+pass, 6 skipped (was 184 — 7 consent tests removed, 5 grant-gate /
+state-machine tests added). Live verification follows the same
+checks as above.

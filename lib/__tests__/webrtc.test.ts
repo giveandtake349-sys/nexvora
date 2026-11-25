@@ -220,20 +220,18 @@ describe("control-channel message validation", () => {
     ).toBeNull();
   });
 
-  it("accepts session-recording messages (request/approve/decline/start/stop/revoke/cancel)", () => {
-    for (const type of [
-      "recording-request",
-      "recording-approve",
-      "recording-decline",
-      "recording-started",
-      "recording-stopped",
-      "recording-revoke",
-      "recording-cancel",
-    ] as const) {
+  it("accepts session-recording indicator messages (start/stop only — no approval handshake)", () => {
+    for (const type of ["recording-started", "recording-stopped"] as const) {
       expect(parseControlMessage({ type })).toEqual({ type });
     }
-    // Recording messages carry no payload — extra fields are ignored,
-    // and a mistyped recording message is dropped like any other.
+    // The old approval handshake is gone: request/approve/decline/
+    // revoke/cancel are dropped like any unknown type, as are
+    // mistyped recording messages.
+    expect(parseControlMessage({ type: "recording-request" })).toBeNull();
+    expect(parseControlMessage({ type: "recording-approve" })).toBeNull();
+    expect(parseControlMessage({ type: "recording-decline" })).toBeNull();
+    expect(parseControlMessage({ type: "recording-revoke" })).toBeNull();
+    expect(parseControlMessage({ type: "recording-cancel" })).toBeNull();
     expect(parseControlMessage({ type: "recording-start" })).toBeNull();
     expect(parseControlMessage({ type: "recording-approved" })).toBeNull();
   });

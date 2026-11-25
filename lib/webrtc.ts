@@ -331,45 +331,21 @@ export interface NotificationMessage {
 }
 
 /**
- * Session recording (v1). The viewer records the remote stream with
- * MediaRecorder, but ONLY after the device owner approves in-session:
- * `recording-request` (viewer asks) -> `recording-approve` /
- * `recording-decline` (owner answers) -> `recording-started` /
- * `recording-stopped` (recorder tells the peer, so both sides always
- * see the indicator). `recording-revoke` is the owner ending a live
- * recording mid-stream — the recorder must stop immediately. `recording-cancel` is the
- * requester withdrawing a still-pending request. The
- * owner recording their own session is self-approved (no request is
- * sent); the peer still gets `recording-started` so the indicator
- * shows on both sides.
+ * Session recording (v1). The recorder tells the peer when a
+ * recording starts/stops (`recording-started` / `recording-stopped`)
+ * so both sides always see the REC indicator. There is NO
+ * per-session approval handshake: the one-time grant the owner gave
+ * at pairing covers recording (any live screen / camera /
+ * microphone grant — the "any-media" rule), so the Record button
+ * starts right away. Recording stops immediately when access is
+ * revoked, the session ends, or the peer leaves.
  */
-export interface RecordingRequestMessage {
-  type: "recording-request";
-}
-
-export interface RecordingApproveMessage {
-  type: "recording-approve";
-}
-
-export interface RecordingDeclineMessage {
-  type: "recording-decline";
-}
-
 export interface RecordingStartedMessage {
   type: "recording-started";
 }
 
 export interface RecordingStoppedMessage {
   type: "recording-stopped";
-}
-
-export interface RecordingRevokeMessage {
-  type: "recording-revoke";
-}
-
-/** The participant withdraws a pending recording request. */
-export interface RecordingCancelMessage {
-  type: "recording-cancel";
 }
 
 export type ControlMessage =
@@ -392,13 +368,8 @@ export type ControlMessage =
   | NotificationSharingStartMessage
   | NotificationSharingStopMessage
   | NotificationMessage
-  | RecordingRequestMessage
-  | RecordingApproveMessage
-  | RecordingDeclineMessage
   | RecordingStartedMessage
-  | RecordingStoppedMessage
-  | RecordingRevokeMessage
-  | RecordingCancelMessage;
+  | RecordingStoppedMessage;
 
 export const CONTROL_MESSAGE_TYPES = [
   "mute-state",
@@ -420,13 +391,8 @@ export const CONTROL_MESSAGE_TYPES = [
   "notification-sharing-start",
   "notification-sharing-stop",
   "notification",
-  "recording-request",
-  "recording-approve",
-  "recording-decline",
   "recording-started",
   "recording-stopped",
-  "recording-revoke",
-  "recording-cancel",
 ] as const;
 
 /**
@@ -514,20 +480,10 @@ export function parseControlMessage(value: unknown): ControlMessage | null {
       if (!notification) return null;
       return { type: "notification", ...notification };
     }
-    case "recording-request":
-      return { type: "recording-request" };
-    case "recording-approve":
-      return { type: "recording-approve" };
-    case "recording-decline":
-      return { type: "recording-decline" };
     case "recording-started":
       return { type: "recording-started" };
     case "recording-stopped":
       return { type: "recording-stopped" };
-    case "recording-revoke":
-      return { type: "recording-revoke" };
-    case "recording-cancel":
-      return { type: "recording-cancel" };
     default:
       return null;
   }
