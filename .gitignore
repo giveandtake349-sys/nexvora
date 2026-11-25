@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# generated brand assets (binary; regenerated from assets/brand-assets.json on postinstall)
+public/logo.png
+app/icon.png
+app/favicon.ico

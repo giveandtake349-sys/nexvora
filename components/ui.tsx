@@ -3,15 +3,13 @@ import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react
 import { NEON_AUTH_NOT_CONFIGURED_MESSAGE } from "@/lib/db/config";
 import { SCOPE_LABELS, type PermissionScope } from "@/lib/permissions";
 
-/** Geometric Tech Symbol — the NEXVORA logo (inline SVG, no stock image). */
-export function Logo({ size = 36 }: { size?: number }) {
+import Image from "next/image";
+
+/** Official NEXVORA logo mark — the white hexagonal N, transparent background. */
+export function Logo({ size = 32 }: { size?: number }) {
+  const width = Math.round((size * 268) / 305);
   return (
-    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" aria-label="NEXVORA logo">
-      <path d="M24 3 42 13.5v21L24 45 6 34.5v-21L24 3Z" stroke="#00E5A8" strokeWidth="2.5" />
-      <path d="M24 12 34 18v12l-10 6-10-6V18l10-6Z" fill="#00E5A8" fillOpacity="0.16" stroke="#D4AF37" strokeWidth="1.5" />
-      <circle cx="24" cy="24" r="3.5" fill="#00E5A8" />
-      <path d="M24 12v8.5M24 27.5V36M14 18l7 4M34 18l-7 4" stroke="#00E5A8" strokeWidth="1.5" />
-    </svg>
+    <Image src="/logo.png" alt="NEXVORA logo" width={width} height={size} className="shrink-0" />
   );
 }
 
