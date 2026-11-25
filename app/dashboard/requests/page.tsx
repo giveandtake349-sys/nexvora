@@ -14,15 +14,25 @@ export default async function RequestsPage() {
       {!data.configured && <ConfigNotice />}
       {data.configured && (
         <>
-          <h2 className="mb-3 font-semibold text-white">Incoming — awaiting your decision</h2>
+          <div className="mb-3 flex items-center gap-2">
+            <h2 className="text-[10px] leading-3 font-bold tracking-[0.06em] text-[rgba(242,247,245,0.62)] uppercase">
+              Requests
+            </h2>
+            {pending.length > 0 && (
+              <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#D4AF37]/10 px-1.5 text-[10px] font-bold text-[#D4AF37]">
+                {pending.length}
+              </span>
+            )}
+          </div>
+          <h2 className="mb-3 text-xl leading-[26px] font-semibold text-white">Incoming — awaiting your decision</h2>
           {pending.length === 0 ? (
             <EmptyState title="No pending requests" body="When someone enters your pairing code, their request appears here." />
           ) : (
-            <div className="grid gap-4">
+            <div className="grid gap-3">
               {pending.map((r) => (
-                <Card key={r.id}>
+                <Card key={r.id} className="border-l-[3px] border-l-[#D4AF37]">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm text-[#E8F0EE]">
+                    <p className="text-[15px] leading-5 font-semibold text-[#F2F7F5]">
                       Request from <span className="font-mono text-xs">{r.requester_user_id.slice(0, 8)}…</span>
                     </p>
                     <Badge tone="gold">Pending</Badge>

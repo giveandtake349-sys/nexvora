@@ -38,7 +38,7 @@ export default function DashboardShell({
   return (
     <div className="min-h-screen bg-[#080D12] lg:flex">
       {/* Desktop sidebar */}
-      <aside className="hidden w-64 shrink-0 flex-col border-r border-[#1E2D38] bg-[#0D141B] p-5 lg:flex">
+      <aside className="hidden w-64 shrink-0 flex-col border-r border-white/10 bg-[#0D141B] p-5 lg:flex">
         <Link href="/dashboard">
           <Wordmark />
         </Link>
@@ -51,10 +51,10 @@ export default function DashboardShell({
               <Link
                 key={item.href}
                 href={item.href}
-                className={`rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                className={`pressable rounded-[14px] px-3 py-2.5 text-sm font-medium ${
                   active
                     ? "bg-[#00E5A8]/10 text-[#00E5A8]"
-                    : "text-[#8FA3A0] hover:bg-white/5 hover:text-white"
+                    : "text-[rgba(242,247,245,0.62)] hover:bg-white/5 hover:text-white"
                 }`}
               >
                 {item.label}
@@ -71,7 +71,7 @@ export default function DashboardShell({
       </aside>
 
       {/* Mobile top bar */}
-      <header className="flex items-center justify-between border-b border-[#1E2D38] bg-[#0D141B] px-4 py-3 lg:hidden">
+      <header className="glass sticky top-0 z-30 flex items-center justify-between border-b border-white/10 px-4 py-3 lg:hidden">
         <Link href="/dashboard">
           <Wordmark />
         </Link>
@@ -80,18 +80,18 @@ export default function DashboardShell({
         </Button>
       </header>
 
-      <main className="flex-1 px-4 py-6 pb-24 sm:px-6 lg:pb-8 lg:pt-8">{children}</main>
+      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 pb-24 sm:px-6 lg:pb-8 lg:pt-8">{children}</main>
 
       {/* Mobile bottom navigation */}
-      <nav className="fixed inset-x-0 bottom-0 z-10 flex overflow-x-auto border-t border-[#1E2D38] bg-[#0D141B] px-2 py-2 lg:hidden">
+      <nav className="glass fixed inset-x-0 bottom-0 z-10 flex overflow-x-auto border-t border-white/10 px-2 py-2 lg:hidden">
         {NAV.map((item) => {
           const active = pathname === item.href;
           return (
             <Link
               key={item.href}
               href={item.href}
-              className={`shrink-0 rounded-lg px-3 py-2 text-xs font-medium whitespace-nowrap ${
-                active ? "bg-[#00E5A8]/10 text-[#00E5A8]" : "text-[#8FA3A0]"
+              className={`shrink-0 rounded-full px-3 py-2 text-xs font-medium whitespace-nowrap ${
+                active ? "bg-[#00E5A8]/10 text-[#00E5A8]" : "text-[rgba(242,247,245,0.62)]"
               }`}
             >
               {item.label}

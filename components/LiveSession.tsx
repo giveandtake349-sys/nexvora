@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Badge, Button, Card } from "./ui";
+import { Badge, Button, Card, Toggle } from "./ui";
 import { HEARTBEAT_INTERVAL_MS } from "@/lib/signaling";
 import {
   createSignalingClient,
@@ -230,6 +230,19 @@ export default function LiveSession({
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const [recordingError, setRecordingError] = useState<string | null>(null);
   const [recordingSavedAt, setRecordingSavedAt] = useState<number | null>(null);
+
+  /* ---------------- Redesign (Opus Spec v2.0 Ch. 3–4) state ---------------- */
+  const [fullView, setFullView] = useState(false);
+  const [endConfirmOpen, setEndConfirmOpen] = useState(false);
+  const [qualitySheetOpen, setQualitySheetOpen] = useState(false);
+  const [flash, setFlash] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const [activityLog, setActivityLog] = useState<string[]>([]);
+  const [typeText, setTypeText] = useState("");
+  const [clockNow, setClockNow] = useState(() => nowMs());
+  const padPosRef = useRef({ x: 0.5, y: 0.5 });
+  const padDraggingRef = useRef(false);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const phaseRef = useRef<LivePhase>("idle");
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -1748,6 +1761,160 @@ export default function LiveSession({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recordingState]);
 
+  /* ---------------- Redesign (Opus Spec v2.0 Ch. 3–4) helpers ---------------- */
+
+  /**
+   * Callback refs: the video elements live in the first-look tree OR
+   * the full-view tree (never both), so the ref must re-attach the
+   * live stream every time the element remounts. The existing
+   * useEffects still handle stream changes while mounted.
+   */
+  const setRemoteScreenVideo = useCallback((el: HTMLVideoElement | null) => {
+    remoteScreenVideoRef.current = el;
+    if (el) {
+      el.srcObject =
+        remoteTracksRef.current.find((t) => t.slot === "screen" && t.kind === "video")
+          ?.stream ?? null;
+    }
+  }, []);
+
+  const setRemoteCameraVideo = useCallback((el: HTMLVideoElement | null) => {
+    remoteCameraVideoRef.current = el;
+    if (el) {
+      el.srcObject =
+        remoteTracksRef.current.find((t) => t.slot === "camera" && t.kind === "video")
+          ?.stream ?? null;
+    }
+  }, []);
+
+  const setLocalPreviewVideo = useCallback(
+    (el: HTMLVideoElement | null) => {
+      localPreviewRef.current = el;
+      if (el) el.srcObject = localPreview;
+    },
+    [localPreview],
+  );
+
+  const setRemoteScreenBox = useCallback((el: HTMLDivElement | null) => {
+    remoteScreenBoxRef.current = el;
+  }, []);
+
+  function logActivity(message: string): void {
+    setActivityLog((prev) => [...prev.slice(-19), message]);
+  }
+
+  function showToast(message: string): void {
+    setToast(message);
+    if (toastTimerRef.current !== null) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 2500);
+  }
+
+  /**
+   * Deck keys (Back / Home / Recents / Power): forwarded over the
+   * existing interaction-key channel, only while the peer allows
+   * interaction — the same channel as typed keys.
+   */
+  function sendDeckKey(key: string): void {
+    if (!peerAllowsInteractionRef.current) return;
+    sendControl({ type: "interaction-key", key });
+    logActivity(`${key} pressed`);
+  }
+
+  /** Swipe pad: drag forwards pointer moves (normalised to the pad),
+   *  remembering the last position for TAP. */
+  function handlePadPointer(event: React.PointerEvent<HTMLDivElement>): void {
+    if (!peerAllowsInteractionRef.current) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const x = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    const y = Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height));
+    padPosRef.current = { x, y };
+    sendControl({ type: "interaction-pointer", kind: "move", x, y });
+  }
+
+  function handlePadTap(event: React.PointerEvent<HTMLButtonElement>): void {
+    event.stopPropagation();
+    if (!peerAllowsInteractionRef.current) return;
+    const { x, y } = padPosRef.current;
+    sendControl({ type: "interaction-pointer", kind: "click", x, y });
+    logActivity("Tap sent to device");
+  }
+
+  function stepVolume(delta: number): void {
+    const next = Math.min(100, Math.max(0, speakerVolume + delta));
+    setSpeakerVolume(next);
+    logActivity(`Volume ${next}%`);
+  }
+
+  /**
+   * Screenshot the remote screen as currently seen: draw the live
+   * video frame to a canvas and download it as a PNG.
+   */
+  function takeScreenshot(): void {
+    const video = remoteScreenVideoRef.current;
+    if (!video || video.videoWidth === 0 || video.videoHeight === 0) {
+      showToast("No remote screen to capture yet.");
+      return;
+    }
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        showToast("Could not capture the remote screen.");
+        return;
+      }
+      ctx.drawImage(video, 0, 0);
+      setFlash(true);
+      window.setTimeout(() => setFlash(false), 120);
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          showToast("Could not capture the remote screen.");
+          return;
+        }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `nexvora-screenshot-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        showToast("Screenshot saved");
+        logActivity("Screenshot saved");
+      }, "image/png");
+    } catch {
+      showToast("Could not capture the remote screen.");
+    }
+  }
+
+  /** Type box: forward each character as an interaction key. */
+  function sendTypedText(): void {
+    if (!peerAllowsInteractionRef.current) return;
+    const text = typeText;
+    if (text.length === 0) return;
+    for (const ch of text) sendControl({ type: "interaction-key", key: ch });
+    logActivity(`Typed: ${text.slice(0, 40)}`);
+    setTypeText("");
+  }
+
+  // Live clock for the first-look status row (30s tick).
+  useEffect(() => {
+    const timer = setInterval(() => setClockNow(nowMs()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Escape exits full view; the session keeps running.
+  useEffect(() => {
+    if (!fullView) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFullView(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fullView]);
+
   /* ---------------- render ---------------- */
 
   const phaseTone: Record<LivePhase, "green" | "gold" | "red" | "muted" | "blue"> =
@@ -1767,6 +1934,28 @@ export default function LiveSession({
   const canPublish = (kind: MediaTrackKind) =>
     canPublishTrack(kind, grantedScopes, isOwner);
 
+  /* First-look permission rows (hero order): granted scopes, read-only —
+   * grants change only from Trusted Devices, never from this card. */
+  const permRows = [
+    { label: "Screen", granted: isOwner || grantedScopes.includes("screen") },
+    { label: "Camera", granted: isOwner || grantedScopes.includes("camera") },
+    { label: "Microphone", granted: isOwner || grantedScopes.includes("microphone") },
+    { label: "Location", granted: isOwner || grantedScopes.includes("location") },
+  ];
+  const permOnCount = permRows.filter((r) => r.granted).length;
+  const clockLabel = new Date(clockNow).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const isRecording = recordingState === "recording" || peerRecording;
+  const recLabel =
+    recordingState === "recording"
+      ? `REC ${formatRecordingDuration(recordingElapsedMs)}`
+      : "REC — peer";
+  const volumeSegments = Math.round((speakerVolume / 100) * 8);
+  const logLines = activityLog.slice(-2);
+
   return (
     <div className="space-y-4">
       <Card>
@@ -1781,15 +1970,15 @@ export default function LiveSession({
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {(recordingState === "recording" || peerRecording) && (
-              <span className="inline-flex items-center gap-2 rounded-full border border-red-400/40 bg-red-500/10 px-2.5 py-0.5 text-xs font-semibold text-red-300">
-                <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-500" />
+            {isRecording && (
+              <span className="inline-flex items-center gap-2 rounded-full border border-[#FF4757]/40 bg-[#FF4757]/10 px-2.5 py-0.5 text-xs font-semibold text-[#FF4757]">
+                <span className="live-dot inline-block h-2 w-2 rounded-full bg-[#FF4757]" />
                 REC — this session is being recorded
               </span>
             )}
             {phase === "live" && (
               <span className="inline-flex items-center gap-2 rounded-full border border-[#00E5A8]/30 bg-[#00E5A8]/10 px-2.5 py-0.5 text-xs font-semibold text-[#00E5A8]">
-                <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-[#00E5A8]" />
+                <span className="live-dot inline-block h-2 w-2 rounded-full bg-[#00E5A8]" />
                 LIVE
               </span>
             )}
@@ -1797,18 +1986,23 @@ export default function LiveSession({
           </div>
         </div>
 
-        <div className="mt-4 rounded-xl border border-[#D4AF37]/40 bg-[#D4AF37]/10 p-4 text-sm text-[#E8F0EE]">
-          Sharing is always visible: your browser and OS show an indicator while screen, camera
-          or microphone is active, and the other side sees exactly which tracks are on. A grant
-          alone never turns anything on — every track below starts only when you press its button
-          and approve the browser prompt. Stop anytime here, or from the browser&apos;s own
-          sharing indicator. The same rule covers file transfer (every file needs the other
-          side&apos;s approval), location (explicit start + browser prompt), and remote
-          interaction (in-page cursor only, stoppable instantly). Recording (below) is covered
-          by the permissions the owner granted once at pairing — no approval is asked again
-          in-session. It shows a REC indicator on both sides, stops instantly if access is
-          revoked, and saves only in the recorder&apos;s browser.
-        </div>
+        <details className="mt-4 rounded-xl border border-[#D4AF37]/40 bg-[#D4AF37]/10 px-4 py-3 text-sm text-[#F2F7F5]">
+          <summary className="cursor-pointer font-semibold text-[#D4AF37]">
+            Sharing is always visible — how consent works
+          </summary>
+          <p className="mt-2">
+            Your browser and OS show an indicator while screen, camera or microphone is active,
+            and the other side sees exactly which tracks are on. A grant alone never turns
+            anything on — every track below starts only when you press its button and approve the
+            browser prompt. Stop anytime here, or from the browser&apos;s own sharing indicator.
+            The same rule covers file transfer (every file needs the other side&apos;s approval),
+            location (explicit start + browser prompt), and remote interaction (in-page cursor
+            only, stoppable instantly). Recording (below) is covered by the permissions the owner
+            granted once at pairing — no approval is asked again in-session. It shows a REC
+            indicator on both sides, stops instantly if access is revoked, and saves only in the
+            recorder&apos;s browser.
+          </p>
+        </details>
 
         {phase === "idle" && (
           <div className="mt-4">
@@ -1844,25 +2038,58 @@ export default function LiveSession({
         )}
       </Card>
 
-      {joined && (
+      {ACTIVE_PHASES.includes(phase) && !fullView && (
         <>
-          <div className="grid gap-4 lg:grid-cols-3">
-            <Card className="lg:col-span-2">
-              <h3 className="font-semibold text-white">
-                Remote screen {remoteScreenOn && <Badge tone="green">Sharing</Badge>}
-              </h3>
+          {/* ---------- FIRST LOOK (Spec Ch. 3, hero-corrected) ---------- */}
+          <div className="mx-auto w-full max-w-[428px]">
+            <div className="glass rounded-[24px] p-4 shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
+              <div className="flex items-center justify-between text-[15px] leading-5 font-semibold text-white">
+                <span className="font-display tabular-nums">{clockLabel}</span>
+                <span className="min-w-0 truncate px-2">{deviceName}</span>
+                <span className="flex items-center gap-1.5 text-xs font-semibold text-[#FF4757]">
+                  {phase === "live" && (
+                    <>
+                      <span className="live-dot inline-block h-1.5 w-1.5 rounded-full bg-[#FF4757]" />
+                      LIVE
+                    </>
+                  )}
+                </span>
+              </div>
+
+              <div className="mt-3 flex h-6 items-center justify-between">
+                {phase === "live" ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-[#FF4757]/30 bg-[#FF4757]/10 px-2.5 py-0.5 text-[10px] leading-3 font-bold tracking-[0.06em] text-[#FF4757] uppercase">
+                    <span className="live-dot inline-block h-1.5 w-1.5 rounded-full bg-[#FF4757]" />
+                    Live
+                  </span>
+                ) : (
+                  <Badge tone={phaseTone[phase]}>{LIVE_PHASE_LABELS[phase]}</Badge>
+                )}
+                {isRecording && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 font-display text-[15px] leading-5 font-semibold text-[#D4AF37] tabular-nums">
+                    <span className="inline-block h-2 w-2 rounded-full bg-white" />
+                    {recLabel}
+                  </span>
+                )}
+              </div>
+
               <div
-                ref={remoteScreenBoxRef}
+                ref={setRemoteScreenBox}
                 tabIndex={0}
-                aria-label="Remote screen. When the other side allows remote interaction, moving your pointer here shows a remote cursor on their view."
-                onPointerMove={(e) => forwardPointer("move", e)}
-                onPointerDown={(e) => forwardPointer("click", e)}
-                onKeyDown={(e) => forwardKey(e)}
-                className="relative mt-3 flex aspect-video items-center justify-center overflow-hidden rounded-xl bg-black outline-none focus:ring-2 focus:ring-[#00E5A8]/60"
+                role="button"
+                aria-label="Remote screen. Activate to open the full controller."
+                onClick={() => setFullView(true)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setFullView(true);
+                  }
+                }}
+                className="relative mt-3 flex aspect-video cursor-pointer items-center justify-center overflow-hidden rounded-2xl bg-black outline-none focus:ring-2 focus:ring-[#00E5A8]/60"
               >
                 {remoteScreenOn ? (
                   <video
-                    ref={remoteScreenVideoRef}
+                    ref={setRemoteScreenVideo}
                     autoPlay
                     playsInline
                     className="h-full w-full object-contain"
@@ -1879,206 +2106,242 @@ export default function LiveSession({
                   </p>
                 )}
               </div>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <div>
-                  <h4 className="text-sm font-semibold text-white">
-                    Remote camera {remoteCameraOn && <Badge tone="green">On</Badge>}
-                    {remoteCameraOn && remoteCameraOff && <Badge tone="gold">Paused by peer</Badge>}
-                  </h4>
-                  <div className="mt-2 flex aspect-video items-center justify-center overflow-hidden rounded-xl bg-black">
-                    {remoteCameraOn ? (
-                      <video
-                        ref={remoteCameraVideoRef}
-                        autoPlay
-                        playsInline
-                        className="h-full w-full object-contain"
-                      />
-                    ) : (
-                      <p className="px-4 text-center text-xs text-[#8FA3A0]">Camera off.</p>
-                    )}
-                  </div>
+
+              <div className="mt-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-[#8FA3A0]">Permissions on</p>
+                  <p className="font-display text-sm font-semibold text-white">
+                    {permOnCount} of 4
+                  </p>
                 </div>
-                <div>
-                  <h4 className="text-sm font-semibold text-white">My preview</h4>
-                  <div className="relative mt-2 flex aspect-video items-center justify-center overflow-hidden rounded-xl bg-black">
-                    {localPreview ? (
-                      <video
-                        ref={localPreviewRef}
-                        autoPlay
-                        playsInline
-                        muted
-                        className="h-full w-full object-contain"
-                      />
-                    ) : (
-                      <p className="px-4 text-center text-xs text-[#8FA3A0]">
-                        Start your camera or screen to preview it here.
-                      </p>
-                    )}
-                    {remoteCursor && localPreview && (
-                      <span
-                        aria-label="Remote cursor"
-                        className="pointer-events-none absolute z-10 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center"
-                        style={{ left: `${remoteCursor.x * 100}%`, top: `${remoteCursor.y * 100}%` }}
-                      >
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="#00E5A8" stroke="#080D12" strokeWidth="1.5" aria-hidden="true">
-                          <path d="M5 3l14 7-6.5 1.5L9 18 5 3z" />
-                        </svg>
-                        {remoteCursor.kind === "click" && (
-                          <span className="absolute h-6 w-6 animate-ping rounded-full border-2 border-[#00E5A8]" />
-                        )}
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {permRows.map((row) => (
+                    <div
+                      key={row.label}
+                      className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5"
+                      title="Granted at pairing — change it from Trusted Devices"
+                    >
+                      <span className="text-[15px] leading-5 font-semibold text-white">
+                        {row.label}
                       </span>
-                    )}
-                  </div>
-                  {remoteCursor && localPreview && (
-                    <p className="mt-1 text-xs text-[#8FA3A0]">
-                      The other side&apos;s pointer is on your shared view — in-page overlay only.
-                      Stop it instantly from Remote interaction below.
-                    </p>
-                  )}
-                </div>
-              </div>
-              {/* Remote audio element — no visible controls; the speaker
-                  slider below is its only control, separate from the mic. */}
-              <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
-            </Card>
-
-            <Card>
-              <h3 className="font-semibold text-white">Tracks</h3>
-              <ul className="mt-3 space-y-2 text-sm">
-                <li className="flex items-center justify-between gap-2">
-                  <span className="text-[#E8F0EE]">My screen</span>
-                  <Badge tone={localScreenOn ? "green" : "muted"}>
-                    {localScreenOn ? "Sharing" : "Off"}
-                  </Badge>
-                </li>
-                <li className="flex items-center justify-between gap-2">
-                  <span className="text-[#E8F0EE]">My camera</span>
-                  <Badge tone={localCameraOn && !cameraOff ? "green" : "muted"}>
-                    {localCameraOn ? (cameraOff ? "Paused" : "On") : "Off"}
-                  </Badge>
-                </li>
-                <li className="flex items-center justify-between gap-2">
-                  <span className="text-[#E8F0EE]">My microphone</span>
-                  <Badge tone={localMicOn && !micMuted ? "green" : "muted"}>
-                    {localMicOn ? (micMuted ? "Muted" : "Live") : "Off"}
-                  </Badge>
-                </li>
-                <li className="flex items-center justify-between gap-2">
-                  <span className="text-[#E8F0EE]">Remote screen</span>
-                  <Badge tone={remoteScreenOn ? "green" : "muted"}>
-                    {remoteScreenOn ? "Sharing" : "Off"}
-                  </Badge>
-                </li>
-                <li className="flex items-center justify-between gap-2">
-                  <span className="text-[#E8F0EE]">Remote camera</span>
-                  <Badge tone={remoteCameraOn && !remoteCameraOff ? "green" : "muted"}>
-                    {remoteCameraOn ? (remoteCameraOff ? "Paused" : "On") : "Off"}
-                  </Badge>
-                </li>
-                <li className="flex items-center justify-between gap-2">
-                  <span className="text-[#E8F0EE]">Remote microphone</span>
-                  <Badge tone={remoteMicOn && !remoteMicMuted ? "green" : "muted"}>
-                    {remoteMicOn ? (remoteMicMuted ? "Muted" : "Live") : "Off"}
-                  </Badge>
-                </li>
-              </ul>
-
-              <h3 className="mt-5 font-semibold text-white">My sharing</h3>
-              <div className="mt-3 flex flex-col gap-2">
-                <Button
-                  variant="outline"
-                  disabled={!canPublish("screen") || !joined}
-                  onClick={() => (localScreenOn ? removeLocalTrack("screen") : void startScreen())}
-                >
-                  {localScreenOn ? "Stop sharing screen" : "Share screen"}
-                </Button>
-                {!canPublish("screen") && (
-                  <p className="text-xs text-[#8FA3A0]">
-                    Screen sharing is not granted to you — ask the device owner to approve it.
-                  </p>
-                )}
-                <Button
-                  variant="outline"
-                  disabled={!canPublish("camera") || !joined}
-                  onClick={() => (localCameraOn ? removeLocalTrack("camera") : void startCamera())}
-                >
-                  {localCameraOn ? "Stop camera" : "Start camera"}
-                </Button>
-                {!canPublish("camera") && (
-                  <p className="text-xs text-[#8FA3A0]">
-                    Camera is not granted to you — ask the device owner to approve it.
-                  </p>
-                )}
-                <Button
-                  variant="outline"
-                  disabled={!canPublish("microphone") || !joined}
-                  onClick={() => (localMicOn ? removeLocalTrack("microphone") : void startMic())}
-                >
-                  {localMicOn ? "Stop microphone" : "Start microphone"}
-                </Button>
-                {!canPublish("microphone") && (
-                  <p className="text-xs text-[#8FA3A0]">
-                    Microphone is not granted to you — ask the device owner to approve it.
-                  </p>
-                )}
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    className="flex-1"
-                    disabled={!localMicOn}
-                    onClick={toggleMicMute}
-                  >
-                    {micMuted ? "Unmute mic" : "Mute mic"}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="flex-1"
-                    disabled={!localCameraOn}
-                    onClick={toggleCameraOff}
-                  >
-                    {cameraOff ? "Camera on" : "Camera off"}
-                  </Button>
+                      <Toggle on={row.granted} onChange={() => {}} disabled compact label={row.label} />
+                    </div>
+                  ))}
                 </div>
               </div>
 
-              <h3 className="mt-5 font-semibold text-white">Speaker (remote audio)</h3>
-              <p className="mt-1 text-xs text-[#8FA3A0]">
-                Plays the remote microphone. Separate from your microphone mute — muting your mic
-                never mutes the speaker.
+              <Button
+                className="mt-3 h-14 w-full text-base"
+                onClick={() => setFullView(true)}
+              >
+                Tap for full view
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M9 6l6 6-6 6" />
+                </svg>
+              </Button>
+              <p className="mt-2 text-center text-xs text-[rgba(242,247,245,0.38)]">
+                Tap the phone to open the full controller.
               </p>
-              <div className="mt-3 flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  disabled={!audioAllowed || !remoteMicOn}
-                  onClick={() => setSpeakerMuted((v) => !v)}
-                >
-                  {speakerMuted ? "Unmute speaker" : "Mute speaker"}
-                </Button>
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  value={speakerVolume}
-                  disabled={!audioAllowed || !remoteMicOn}
-                  onChange={(e) => setSpeakerVolume(Number(e.target.value))}
-                  aria-label="Speaker volume"
-                  className="flex-1 accent-[#00E5A8]"
-                />
-                <span className="w-10 text-right text-xs text-[#8FA3A0]">{speakerVolume}%</span>
+            </div>
+          </div>
+
+          {/* Remote camera + my preview */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Card>
+              <h4 className="text-sm font-semibold text-white">
+                Remote camera {remoteCameraOn && <Badge tone="green">On</Badge>}
+                {remoteCameraOn && remoteCameraOff && <Badge tone="gold">Paused by peer</Badge>}
+              </h4>
+              <div className="mt-2 flex aspect-video items-center justify-center overflow-hidden rounded-2xl bg-black">
+                {remoteCameraOn ? (
+                  <video
+                    ref={setRemoteCameraVideo}
+                    autoPlay
+                    playsInline
+                    className="h-full w-full object-contain"
+                  />
+                ) : (
+                  <p className="px-4 text-center text-xs text-[#8FA3A0]">Camera off.</p>
+                )}
               </div>
-              {!audioAllowed && (
-                <p className="mt-2 text-xs text-[#8FA3A0]">
-                  Speaker playback is not granted to you — ask the device owner to approve the
-                  speaker permission.
-                </p>
-              )}
-              {!remoteMicOn && audioAllowed && (
-                <p className="mt-2 text-xs text-[#8FA3A0]">
-                  The remote microphone is off, so there is no audio to play yet.
+            </Card>
+            <Card>
+              <h4 className="text-sm font-semibold text-white">My preview</h4>
+              <div className="relative mt-2 flex aspect-video items-center justify-center overflow-hidden rounded-2xl bg-black">
+                {localPreview ? (
+                  <video
+                    ref={setLocalPreviewVideo}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="h-full w-full object-contain"
+                  />
+                ) : (
+                  <p className="px-4 text-center text-xs text-[#8FA3A0]">
+                    Start your camera or screen to preview it here.
+                  </p>
+                )}
+                {remoteCursor && localPreview && (
+                  <span
+                    aria-label="Remote cursor"
+                    className="pointer-events-none absolute z-10 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center"
+                    style={{ left: `${remoteCursor.x * 100}%`, top: `${remoteCursor.y * 100}%` }}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="#00E5A8" stroke="#080D12" strokeWidth="1.5" aria-hidden="true">
+                      <path d="M5 3l14 7-6.5 1.5L9 18 5 3z" />
+                    </svg>
+                    {remoteCursor.kind === "click" && (
+                      <span className="absolute h-6 w-6 animate-ping rounded-full border-2 border-[#00E5A8]" />
+                    )}
+                  </span>
+                )}
+              </div>
+              {remoteCursor && localPreview && (
+                <p className="mt-1 text-xs text-[#8FA3A0]">
+                  The other side&apos;s pointer is on your shared view — in-page overlay only.
+                  Stop it instantly from Remote interaction below.
                 </p>
               )}
             </Card>
           </div>
+
+          {/* Tracks + sharing + speaker */}
+          <Card>
+            <h3 className="font-semibold text-white">Tracks</h3>
+            <ul className="mt-3 space-y-2 text-sm">
+              <li className="flex items-center justify-between gap-2">
+                <span className="text-[#F2F7F5]">My screen</span>
+                <Badge tone={localScreenOn ? "green" : "muted"}>
+                  {localScreenOn ? "Sharing" : "Off"}
+                </Badge>
+              </li>
+              <li className="flex items-center justify-between gap-2">
+                <span className="text-[#F2F7F5]">My camera</span>
+                <Badge tone={localCameraOn && !cameraOff ? "green" : "muted"}>
+                  {localCameraOn ? (cameraOff ? "Paused" : "On") : "Off"}
+                </Badge>
+              </li>
+              <li className="flex items-center justify-between gap-2">
+                <span className="text-[#F2F7F5]">My microphone</span>
+                <Badge tone={localMicOn && !micMuted ? "green" : "muted"}>
+                  {localMicOn ? (micMuted ? "Muted" : "Live") : "Off"}
+                </Badge>
+              </li>
+              <li className="flex items-center justify-between gap-2">
+                <span className="text-[#F2F7F5]">Remote screen</span>
+                <Badge tone={remoteScreenOn ? "green" : "muted"}>
+                  {remoteScreenOn ? "Sharing" : "Off"}
+                </Badge>
+              </li>
+              <li className="flex items-center justify-between gap-2">
+                <span className="text-[#F2F7F5]">Remote camera</span>
+                <Badge tone={remoteCameraOn && !remoteCameraOff ? "green" : "muted"}>
+                  {remoteCameraOn ? (remoteCameraOff ? "Paused" : "On") : "Off"}
+                </Badge>
+              </li>
+              <li className="flex items-center justify-between gap-2">
+                <span className="text-[#F2F7F5]">Remote microphone</span>
+                <Badge tone={remoteMicOn && !remoteMicMuted ? "green" : "muted"}>
+                  {remoteMicOn ? (remoteMicMuted ? "Muted" : "Live") : "Off"}
+                </Badge>
+              </li>
+            </ul>
+
+            <h3 className="mt-5 font-semibold text-white">My sharing</h3>
+            <div className="mt-3 flex flex-col gap-2">
+              <Button
+                variant="outline"
+                disabled={!canPublish("screen") || !joined}
+                onClick={() => (localScreenOn ? removeLocalTrack("screen") : void startScreen())}
+              >
+                {localScreenOn ? "Stop sharing screen" : "Share screen"}
+              </Button>
+              {!canPublish("screen") && (
+                <p className="text-xs text-[#8FA3A0]">
+                  Screen sharing is not granted to you — ask the device owner to approve it.
+                </p>
+              )}
+              <Button
+                variant="outline"
+                disabled={!canPublish("camera") || !joined}
+                onClick={() => (localCameraOn ? removeLocalTrack("camera") : void startCamera())}
+              >
+                {localCameraOn ? "Stop camera" : "Start camera"}
+              </Button>
+              {!canPublish("camera") && (
+                <p className="text-xs text-[#8FA3A0]">
+                  Camera is not granted to you — ask the device owner to approve it.
+                </p>
+              )}
+              <Button
+                variant="outline"
+                disabled={!canPublish("microphone") || !joined}
+                onClick={() => (localMicOn ? removeLocalTrack("microphone") : void startMic())}
+              >
+                {localMicOn ? "Stop microphone" : "Start microphone"}
+              </Button>
+              {!canPublish("microphone") && (
+                <p className="text-xs text-[#8FA3A0]">
+                  Microphone is not granted to you — ask the device owner to approve it.
+                </p>
+              )}
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  disabled={!localMicOn}
+                  onClick={toggleMicMute}
+                >
+                  {micMuted ? "Unmute mic" : "Mute mic"}
+                </Button>
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  disabled={!localCameraOn}
+                  onClick={toggleCameraOff}
+                >
+                  {cameraOff ? "Camera on" : "Camera off"}
+                </Button>
+              </div>
+            </div>
+
+            <h3 className="mt-5 font-semibold text-white">Speaker (remote audio)</h3>
+            <p className="mt-1 text-xs text-[#8FA3A0]">
+              Plays the remote microphone. Separate from your microphone mute — muting your mic
+              never mutes the speaker.
+            </p>
+            <div className="mt-3 flex items-center gap-2">
+              <Button
+                variant="outline"
+                disabled={!audioAllowed || !remoteMicOn}
+                onClick={() => setSpeakerMuted((v) => !v)}
+              >
+                {speakerMuted ? "Unmute speaker" : "Mute speaker"}
+              </Button>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={speakerVolume}
+                disabled={!audioAllowed || !remoteMicOn}
+                onChange={(e) => setSpeakerVolume(Number(e.target.value))}
+                aria-label="Speaker volume"
+                className="flex-1 accent-[#00E5A8]"
+              />
+              <span className="w-10 text-right text-xs text-[#8FA3A0]">{speakerVolume}%</span>
+            </div>
+            {!audioAllowed && (
+              <p className="mt-2 text-xs text-[#8FA3A0]">
+                Speaker playback is not granted to you — ask the device owner to approve the
+                speaker permission.
+              </p>
+            )}
+            {!remoteMicOn && audioAllowed && (
+              <p className="mt-2 text-xs text-[#8FA3A0]">
+                The remote microphone is off, so there is no audio to play yet.
+              </p>
+            )}
+          </Card>
 
           <div className="grid gap-4 lg:grid-cols-2">
             {/* ---------- File transfer ---------- */}
@@ -2135,7 +2398,7 @@ export default function LiveSession({
               {fileError && <p className="mt-2 text-sm text-red-300">{fileError}</p>}
               {outgoingTransfer && (
                 <div className="mt-3 rounded-lg border border-[#1E2D38] p-3 text-sm">
-                  <p className="text-[#E8F0EE]">
+                  <p className="text-[#F2F7F5]">
                     Sending: <span className="font-semibold">{outgoingTransfer.fileName}</span> ·{" "}
                     {(outgoingTransfer.fileSizeBytes / 1024).toFixed(1)} KB
                   </p>
@@ -2163,7 +2426,7 @@ export default function LiveSession({
               )}
               {incomingTransfer && (
                 <div className="mt-3 rounded-lg border border-[#1E2D38] p-3 text-sm">
-                  <p className="text-[#E8F0EE]">
+                  <p className="text-[#F2F7F5]">
                     Receiving: <span className="font-semibold">{incomingTransfer.fileName}</span>{" "}
                     · {(incomingTransfer.fileSizeBytes / 1024).toFixed(1)} KB
                   </p>
@@ -2204,7 +2467,7 @@ export default function LiveSession({
                       <a
                         href={incomingTransfer.downloadUrl}
                         download={incomingTransfer.fileName}
-                        className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#00E5A8] px-4 py-2.5 text-sm font-semibold text-[#080D12] hover:bg-[#33ecb8]"
+                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-[14px] bg-[#00E5A8] px-4 py-2.5 text-sm font-semibold text-[#062018] hover:bg-[#00C790]"
                       >
                         Download {incomingTransfer.fileName}
                       </a>
@@ -2246,13 +2509,13 @@ export default function LiveSession({
               {locationError && <p className="mt-2 text-sm text-red-300">{locationError}</p>}
               {sharingLocation && (
                 <p className="mt-3 inline-flex items-center gap-2 rounded-full border border-[#00E5A8]/30 bg-[#00E5A8]/10 px-2.5 py-0.5 text-xs font-semibold text-[#00E5A8]">
-                  <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-[#00E5A8]" />
+                  <span className="live-dot inline-block h-2 w-2 rounded-full bg-[#00E5A8]" />
                   Sharing my location
                 </p>
               )}
               {peerSharingLocation && (
                 <div className="mt-3 rounded-lg border border-[#1E2D38] p-3 text-sm">
-                  <p className="text-[#E8F0EE]">
+                  <p className="text-[#F2F7F5]">
                     <span className="font-semibold">The other side is sharing location</span>
                   </p>
                   {peerLocation ? (
@@ -2321,13 +2584,13 @@ export default function LiveSession({
               )}
               <ul className="mt-3 space-y-1 text-sm">
                 <li className="flex items-center justify-between gap-2">
-                  <span className="text-[#E8F0EE]">I allow interaction on my view</span>
+                  <span className="text-[#F2F7F5]">I allow interaction on my view</span>
                   <Badge tone={allowInteraction ? "green" : "muted"}>
                     {allowInteraction ? "On" : "Off"}
                   </Badge>
                 </li>
                 <li className="flex items-center justify-between gap-2">
-                  <span className="text-[#E8F0EE]">The other side allows me to interact</span>
+                  <span className="text-[#F2F7F5]">The other side allows me to interact</span>
                   <Badge tone={peerAllowsInteraction ? "green" : "muted"}>
                     {peerAllowsInteraction ? "On" : "Off"}
                   </Badge>
@@ -2345,7 +2608,7 @@ export default function LiveSession({
                   <p className="mt-1 text-xs text-[#8FA3A0]">
                     Shown here only — never typed into this device or its OS.
                   </p>
-                  <p className="mt-1 break-all text-[#E8F0EE]">
+                  <p className="mt-1 break-all text-[#F2F7F5]">
                     {interactionKeys.map((k) => (k === " " ? "␣" : k)).join(" ")}
                   </p>
                 </div>
@@ -2370,7 +2633,7 @@ export default function LiveSession({
               </p>
               {peerSharingNotifications && (
                 <p className="mt-3 inline-flex items-center gap-2 rounded-full border border-[#00E5A8]/30 bg-[#00E5A8]/10 px-2.5 py-0.5 text-xs font-semibold text-[#00E5A8]">
-                  <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-[#00E5A8]" />
+                  <span className="live-dot inline-block h-2 w-2 rounded-full bg-[#00E5A8]" />
                   Notification sharing active
                 </p>
               )}
@@ -2392,7 +2655,7 @@ export default function LiveSession({
                         <span className="font-semibold text-white">{n.title}</span>
                         <span className="text-xs text-[#8FA3A0]">{n.app}</span>
                       </p>
-                      {n.body && <p className="mt-1 text-[#E8F0EE]">{n.body}</p>}
+                      {n.body && <p className="mt-1 text-[#F2F7F5]">{n.body}</p>}
                       <p className="mt-1 text-xs text-[#8FA3A0]">
                         {new Date(n.receivedAt).toLocaleString()}
                       </p>
@@ -2421,9 +2684,9 @@ export default function LiveSession({
                 extra approval. It stops instantly if access is revoked, and never runs longer
                 than 1 hour.
               </p>
-              {(recordingState === "recording" || peerRecording) && (
-                <p className="mt-3 inline-flex items-center gap-2 rounded-full border border-red-400/40 bg-red-500/10 px-2.5 py-0.5 text-xs font-semibold text-red-300">
-                  <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-500" />
+              {isRecording && (
+                <p className="mt-3 inline-flex items-center gap-2 rounded-full border border-[#FF4757]/40 bg-[#FF4757]/10 px-2.5 py-0.5 text-xs font-semibold text-[#FF4757]">
+                  <span className="live-dot inline-block h-2 w-2 rounded-full bg-[#FF4757]" />
                   REC
                   {recordingState === "recording"
                     ? ` — recording ${formatRecordingDuration(recordingElapsedMs)}`
@@ -2495,6 +2758,402 @@ export default function LiveSession({
         </>
       )}
 
+      {ACTIVE_PHASES.includes(phase) && fullView && (
+        <div className="fixed inset-0 z-50 flex h-dvh flex-col overflow-hidden bg-[#080D12]">
+          {/* ---------- FULL VIEW top bar (Spec 4.1, pinned) ---------- */}
+          <div className="flex h-[52px] shrink-0 items-center justify-between gap-2 border-b border-white/10 bg-[rgba(18,27,36,0.72)] px-3 backdrop-blur-[20px]">
+            <div className="flex min-w-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setFullView(false)}
+                aria-label="Back to first look"
+                className="pressable flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M15 6l-6 6 6 6" />
+                </svg>
+              </button>
+              {phase === "live" && (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-[#FF4757]/30 bg-[#FF4757]/10 px-2.5 py-0.5 text-[10px] leading-3 font-bold tracking-[0.06em] text-[#FF4757] uppercase">
+                  <span className="live-dot inline-block h-1.5 w-1.5 rounded-full bg-[#FF4757]" />
+                  Live
+                </span>
+              )}
+            </div>
+            <div className="min-w-0 text-center">
+              <p className="truncate text-[15px] leading-5 font-semibold text-white">
+                {deviceName}
+              </p>
+              {isRecording && (
+                <p className="font-display text-xs font-semibold text-[#D4AF37] tabular-nums">
+                  {recLabel}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setEndConfirmOpen(true)}
+              className="pressable flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-[#FF4757] px-3 text-[13px] font-bold text-white"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 3v8" />
+                <path d="M6.3 6.3a8 8 0 1 0 11.4 0" />
+              </svg>
+              End Session
+            </button>
+          </div>
+
+          {/* ---------- FULL VIEW video area (Spec 4.2, dominant) ---------- */}
+          <div className="relative mx-2 mt-3 min-h-[240px] flex-1 overflow-hidden rounded-2xl bg-black">
+            <div
+              ref={setRemoteScreenBox}
+              tabIndex={0}
+              aria-label="Remote screen. When the other side allows remote interaction, moving your pointer here shows a remote cursor on their view. Tap the screen to control it."
+              onPointerMove={(e) => forwardPointer("move", e)}
+              onPointerDown={(e) => forwardPointer("click", e)}
+              onKeyDown={(e) => forwardKey(e)}
+              className="absolute inset-0 outline-none focus:ring-2 focus:ring-inset focus:ring-[#00E5A8]/60"
+            >
+              {remoteScreenOn ? (
+                <video
+                  ref={setRemoteScreenVideo}
+                  autoPlay
+                  playsInline
+                  className="h-full w-full object-contain"
+                />
+              ) : (
+                <p className="flex h-full items-center justify-center px-4 text-center text-sm text-[#8FA3A0]">
+                  No screen being shared right now.
+                </p>
+              )}
+            </div>
+            {isRecording && (
+              <span className="absolute top-3 left-3 inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/60 px-2.5 py-0.5 text-[10px] leading-3 font-bold tracking-[0.06em] text-white uppercase backdrop-blur-[20px]">
+                <span className="live-dot inline-block h-2 w-2 rounded-full bg-[#FF4757]" />
+                Rec
+              </span>
+            )}
+            <span className="absolute top-3 right-3 rounded-full border border-white/10 bg-black/60 px-2.5 py-0.5 text-[10px] leading-3 font-bold tracking-[0.06em] text-white uppercase backdrop-blur-[20px]">
+              Auto
+            </span>
+            {remoteCameraOn && (
+              <div className="absolute bottom-2 left-2 w-28 overflow-hidden rounded-lg border border-white/10 bg-black">
+                <video
+                  ref={setRemoteCameraVideo}
+                  autoPlay
+                  playsInline
+                  className="aspect-video w-full object-contain"
+                />
+              </div>
+            )}
+            {localPreview && (
+              <div className="absolute right-2 bottom-2 w-28 overflow-hidden rounded-lg border border-white/10 bg-black">
+                <video
+                  ref={setLocalPreviewVideo}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="aspect-video w-full object-contain"
+                />
+                {remoteCursor && (
+                  <span
+                    aria-label="Remote cursor"
+                    className="pointer-events-none absolute z-10 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center"
+                    style={{ left: `${remoteCursor.x * 100}%`, top: `${remoteCursor.y * 100}%` }}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="#00E5A8" stroke="#080D12" strokeWidth="1.5" aria-hidden="true">
+                      <path d="M5 3l14 7-6.5 1.5L9 18 5 3z" />
+                    </svg>
+                    {remoteCursor.kind === "click" && (
+                      <span className="absolute h-6 w-6 animate-ping rounded-full border-2 border-[#00E5A8]" />
+                    )}
+                  </span>
+                )}
+              </div>
+            )}
+            {flash && <div className="flash-overlay pointer-events-none absolute inset-0 bg-white" />}
+            {peerAllowsInteraction && remoteScreenOn && (
+              <p className="absolute bottom-2 left-1/2 hidden -translate-x-1/2 rounded bg-black/70 px-2 py-1 text-[11px] whitespace-nowrap text-[#00E5A8] sm:block">
+                Remote interaction on — tap the screen to control
+              </p>
+            )}
+          </div>
+
+          {/* ---------- FULL VIEW control deck (Spec 4.3, compact) ---------- */}
+          <div className="glass mx-3 mt-3 mb-3 shrink-0 rounded-[20px] p-4 shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
+            <div className="flex items-center justify-center gap-3">
+              <button
+                type="button"
+                aria-label="Back"
+                disabled={!peerAllowsInteraction}
+                onClick={() => sendDeckKey("Back")}
+                className="pressable flex h-9 w-[72px] items-center justify-center rounded-[10px] border border-white/10 bg-white/5 text-white disabled:opacity-40"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M15 6l-6 6 6 6" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                aria-label="Home"
+                disabled={!peerAllowsInteraction}
+                onClick={() => sendDeckKey("Home")}
+                className="pressable flex h-9 w-[72px] items-center justify-center rounded-[10px] border border-white/10 bg-white/5 text-white disabled:opacity-40"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="8" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                aria-label="Recents"
+                disabled={!peerAllowsInteraction}
+                onClick={() => sendDeckKey("Recents")}
+                className="pressable flex h-9 w-[72px] items-center justify-center rounded-[10px] border border-white/10 bg-white/5 text-white disabled:opacity-40"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="4" y="4" width="16" height="16" rx="2" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="mt-3 flex items-start justify-center gap-4">
+              {/* Volume rocker + meter */}
+              <div className="flex w-14 flex-col items-center gap-2">
+                <button
+                  type="button"
+                  aria-label="Volume up"
+                  disabled={!audioAllowed || !remoteMicOn}
+                  onClick={() => stepVolume(10)}
+                  className="pressable flex h-14 w-14 items-center justify-center rounded-[14px] border border-white/10 bg-white/5 text-white disabled:opacity-40"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M11 5L6 9H3v6h3l5 4V5z" />
+                    <path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" />
+                  </svg>
+                </button>
+                <div className="flex h-8 w-1 flex-col gap-[2px]" aria-hidden="true">
+                  {Array.from({ length: 8 }).map((_, i) => (
+                    <span
+                      key={i}
+                      className={`flex-1 rounded-full ${i < volumeSegments ? "bg-[#00E5A8]" : "bg-white/10"}`}
+                    />
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  aria-label="Volume down"
+                  disabled={!audioAllowed || !remoteMicOn}
+                  onClick={() => stepVolume(-10)}
+                  className="pressable flex h-14 w-14 items-center justify-center rounded-[14px] border border-white/10 bg-white/5 text-white disabled:opacity-40"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M11 5L6 9H3v6h3l5 4V5z" />
+                    <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Swipe pad + TAP */}
+              <div
+                role="application"
+                aria-label="Swipe pad. Drag to move the remote pointer, tap TAP to click."
+                className={`relative h-[168px] w-[168px] touch-none rounded-[20px] border border-white/10 bg-white/5 ${
+                  peerAllowsInteraction ? "" : "opacity-40"
+                }`}
+                onPointerDown={(e) => {
+                  padDraggingRef.current = true;
+                  handlePadPointer(e);
+                }}
+                onPointerMove={(e) => {
+                  if (padDraggingRef.current) handlePadPointer(e);
+                }}
+                onPointerUp={() => {
+                  padDraggingRef.current = false;
+                }}
+                onPointerLeave={() => {
+                  padDraggingRef.current = false;
+                }}
+              >
+                <span className="absolute top-1/2 left-0 h-px w-full bg-white/5" aria-hidden="true" />
+                <span className="absolute top-0 left-1/2 h-full w-px bg-white/5" aria-hidden="true" />
+                <button
+                  type="button"
+                  aria-label="Tap the remote screen"
+                  disabled={!peerAllowsInteraction}
+                  onPointerDown={handlePadTap}
+                  className="pressable absolute top-1/2 left-1/2 flex h-12 w-12 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-[#00E5A8] bg-[#121B24] text-[11px] font-bold text-[#00E5A8] disabled:opacity-40"
+                >
+                  TAP
+                </button>
+              </div>
+
+              {/* Power + Screenshot */}
+              <div className="flex w-14 flex-col gap-2">
+                <button
+                  type="button"
+                  aria-label="Power"
+                  disabled={!peerAllowsInteraction}
+                  onClick={() => sendDeckKey("Power")}
+                  className="pressable flex h-14 w-14 items-center justify-center rounded-[14px] border border-white/10 bg-white/5 text-white active:border-[#FF4757]/40 active:text-[#FF4757] disabled:opacity-40"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 3v8" />
+                    <path d="M6.3 6.3a8 8 0 1 0 11.4 0" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  aria-label="Screenshot"
+                  onClick={takeScreenshot}
+                  className="pressable flex h-14 w-14 items-center justify-center rounded-[14px] border border-white/10 bg-white/5 text-white"
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M4 8h3l2-3h6l2 3h3v11H4V8z" />
+                    <circle cx="12" cy="13" r="3.5" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Type box */}
+            <div className="mt-3 flex items-center gap-2">
+              <input
+                value={typeText}
+                onChange={(e) => setTypeText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") sendTypedText();
+                }}
+                placeholder="Type a message or command…"
+                aria-label="Type text to send to the remote device"
+                disabled={!peerAllowsInteraction}
+                className="h-11 flex-1 rounded-xl border border-[#1E2D38] bg-[#121B24] px-3.5 text-[13px] text-white placeholder:text-[rgba(242,247,245,0.38)] outline-none focus:border-[#00E5A8] disabled:opacity-50"
+              />
+              <button
+                type="button"
+                aria-label="Send text"
+                onClick={sendTypedText}
+                disabled={!peerAllowsInteraction || typeText.length === 0}
+                className="pressable flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#00E5A8] text-[#062018] disabled:opacity-40"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M22 2L11 13" />
+                  <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Quality + activity log */}
+            <div className="mt-3 flex items-start justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setQualitySheetOpen(true)}
+                className="pressable flex h-8 shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/5 px-3 text-xs font-semibold text-white"
+              >
+                Auto
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M6 9l6 6 6-6" />
+                </svg>
+              </button>
+              <div className="min-w-0 flex-1 text-right" aria-live="polite">
+                {logLines.length === 0 ? (
+                  <p className="truncate text-[11px] text-[rgba(242,247,245,0.38)]">
+                    {peerAllowsInteraction
+                      ? "Tap the phone screen directly, or use the pad below."
+                      : "Remote interaction is off — ask the other side to allow it."}
+                  </p>
+                ) : (
+                  logLines.map((line, i) => (
+                    <p
+                      key={`${i}-${line}`}
+                      className={`truncate text-[11px] ${
+                        i === logLines.length - 1
+                          ? "text-[#F2F7F5]"
+                          : "text-[rgba(242,247,245,0.38)]"
+                      }`}
+                    >
+                      {line}
+                    </p>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* End-session confirm sheet */}
+          {endConfirmOpen && (
+            <div
+              className="absolute inset-0 z-[60] flex items-end justify-center bg-black/60"
+              onClick={() => setEndConfirmOpen(false)}
+            >
+              <div
+                className="sheet-up glass w-full max-w-[428px] rounded-t-[20px] p-4 pb-6"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 className="text-lg font-semibold text-white">End session?</h3>
+                <p className="mt-1 text-sm text-[#8FA3A0]">
+                  The recording will be saved to Recordings.
+                </p>
+                <div className="mt-4 space-y-2">
+                  <Button
+                    variant="danger"
+                    className="h-11 w-full"
+                    onClick={() => {
+                      setEndConfirmOpen(false);
+                      setFullView(false);
+                      void endSession();
+                    }}
+                  >
+                    End session
+                  </Button>
+                  <Button
+                    variant="glass"
+                    className="h-11 w-full"
+                    onClick={() => setEndConfirmOpen(false)}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Quality sheet — web quality adapts automatically; no fake setting. */}
+          {qualitySheetOpen && (
+            <div
+              className="absolute inset-0 z-[60] flex items-end justify-center bg-black/60"
+              onClick={() => setQualitySheetOpen(false)}
+            >
+              <div
+                className="sheet-up glass w-full max-w-[428px] rounded-t-[20px] p-4 pb-6"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 className="text-lg font-semibold text-white">Stream quality</h3>
+                <p className="mt-1 text-sm text-[#8FA3A0]">
+                  Quality adapts automatically to the connection on web — there is no manual
+                  setting. The remote side sends the best quality the connection supports.
+                </p>
+                <div className="mt-4">
+                  <Button
+                    variant="glass"
+                    className="h-11 w-full"
+                    onClick={() => setQualitySheetOpen(false)}
+                  >
+                    Close
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {toast && (
+            <div className="absolute top-[64px] left-1/2 z-[70] -translate-x-1/2 rounded-full border border-white/10 bg-[rgba(18,27,36,0.9)] px-4 py-2 text-sm font-semibold whitespace-nowrap text-white shadow-lg">
+              {toast}
+            </div>
+          )}
+        </div>
+      )}
+
       {(phase === "ended" || phase === "revoked") && (
         <Card>
           <div className="flex flex-wrap gap-2">
@@ -2507,6 +3166,9 @@ export default function LiveSession({
           </div>
         </Card>
       )}
+
+      {/* Remote audio element — no visible controls; the speaker slider is its only control. */}
+      <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
     </div>
   );
 }

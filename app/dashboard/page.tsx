@@ -40,23 +40,23 @@ export default async function DashboardPage() {
       <PageHeader title="Overview" subtitle={`Welcome back, ${data.user.displayName ?? data.user.email}.`} />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
-          <p className="text-xs tracking-wide text-[#8FA3A0] uppercase">My devices</p>
-          <p className="mt-2 text-3xl font-bold text-white">{data.devices.length}</p>
+          <p className="text-[10px] leading-3 font-bold tracking-[0.06em] text-[rgba(242,247,245,0.62)] uppercase">My devices</p>
+          <p className="mt-2 font-display text-[28px] leading-[34px] font-bold text-white">{data.devices.length}</p>
           <p className="text-sm text-[#8FA3A0]">{onlineDevices.length} online now</p>
         </Card>
         <Card>
-          <p className="text-xs tracking-wide text-[#8FA3A0] uppercase">Pending requests</p>
-          <p className="mt-2 text-3xl font-bold text-[#D4AF37]">{pending.length}</p>
+          <p className="text-[10px] leading-3 font-bold tracking-[0.06em] text-[rgba(242,247,245,0.62)] uppercase">Pending requests</p>
+          <p className="mt-2 font-display text-[28px] leading-[34px] font-bold text-[#D4AF37]">{pending.length}</p>
           <p className="text-sm text-[#8FA3A0]">awaiting your approval</p>
         </Card>
         <Card>
-          <p className="text-xs tracking-wide text-[#8FA3A0] uppercase">Active sessions</p>
-          <p className="mt-2 text-3xl font-bold text-[#00E5A8]">{activeSessions.length}</p>
+          <p className="text-[10px] leading-3 font-bold tracking-[0.06em] text-[rgba(242,247,245,0.62)] uppercase">Active sessions</p>
+          <p className="mt-2 font-display text-[28px] leading-[34px] font-bold text-[#00E5A8]">{activeSessions.length}</p>
           <p className="text-sm text-[#8FA3A0]">live connections</p>
         </Card>
         <Card>
-          <p className="text-xs tracking-wide text-[#8FA3A0] uppercase">Live grants</p>
-          <p className="mt-2 text-3xl font-bold text-white">{liveGrants.length}</p>
+          <p className="text-[10px] leading-3 font-bold tracking-[0.06em] text-[rgba(242,247,245,0.62)] uppercase">Live grants</p>
+          <p className="mt-2 font-display text-[28px] leading-[34px] font-bold text-white">{liveGrants.length}</p>
           <p className="text-sm text-[#8FA3A0]">permissions you granted</p>
         </Card>
       </div>

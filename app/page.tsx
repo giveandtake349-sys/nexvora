@@ -122,7 +122,7 @@ export default function Home() {
         <section className="grid items-center gap-10 py-14 sm:py-20 lg:grid-cols-[1.05fr_0.95fr]">
           <div className="text-center lg:text-left">
             <Badge tone="green">Recording &amp; live control are live</Badge>
-            <h1 className="mx-auto mt-6 max-w-3xl text-5xl leading-tight tracking-tight font-bold text-white sm:text-6xl lg:mx-0">
+            <h1 className="mx-auto mt-6 max-w-3xl font-display text-5xl leading-tight tracking-tight font-bold text-white sm:text-6xl lg:mx-0">
               ONE ECOSYSTEM. <span className="text-[#00E5A8]">EVERY DEVICE.</span>
             </h1>
             <p className="mx-auto mt-5 max-w-2xl text-lg text-[#8FA3A0] lg:mx-0">

@@ -123,11 +123,16 @@ export function GenerateCodeForm({ devices }: { devices: { id: string; name: str
       </Button>
       {s.error && <p className="text-sm text-red-300">{s.error}</p>}
       {code && (
-        <div className="rounded-xl border border-[#00E5A8]/40 bg-[#00E5A8]/10 p-4 text-center">
-          <p className="text-xs tracking-wide text-[#8FA3A0] uppercase">Share this code — it expires in 10 minutes and works once</p>
-          <p className="mt-1 font-mono text-4xl font-bold tracking-[0.3em] text-[#00E5A8]">{code}</p>
-          <p className="mt-1 text-xs text-[#8FA3A0]">
-            Expires {expiresAt ? new Date(expiresAt).toLocaleTimeString() : ""}. The code alone grants
+        <div className="rounded-[20px] border border-[#D4AF37]/35 bg-[rgba(18,27,36,0.72)] p-4 text-center shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
+          <p className="text-[10px] leading-3 font-bold tracking-[0.06em] text-[rgba(242,247,245,0.62)] uppercase">
+            Pairing code
+          </p>
+          <p className="mt-2 font-display text-[32px] leading-8 font-bold tracking-[8px] text-[#D4AF37]">
+            {code}
+          </p>
+          <p className="mt-2 text-xs text-[#8FA3A0]">
+            Enter on your new device · expires{" "}
+            {expiresAt ? new Date(expiresAt).toLocaleTimeString() : ""}. The code alone grants
             nothing — you must still approve the request.
           </p>
         </div>
@@ -254,12 +259,12 @@ export function DecideRequestForm({
       <p className="text-xs text-[#8FA3A0]">
         Only the checked scopes will be granted (30-day expiry). Unchecked scopes stay ungranted.
       </p>
-      <div className="flex gap-2">
-        <Button onClick={approve} disabled={s.busy || selected.length === 0}>
+      <div className="flex gap-3">
+        <Button onClick={approve} disabled={s.busy || selected.length === 0} className="h-10 flex-1">
           Approve selected
         </Button>
-        <Button variant="danger" onClick={reject} disabled={s.busy}>
-          Reject
+        <Button variant="glass" onClick={reject} disabled={s.busy} className="h-10 flex-1">
+          Decline
         </Button>
       </div>
       {s.error && <p className="text-sm text-red-300">{s.error}</p>}

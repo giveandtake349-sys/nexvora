@@ -1,21 +1,27 @@
 @import "tailwindcss";
 
+/* Opus Redesign Spec v2.0 — Chapter 0: design foundations. */
 @theme inline {
   --color-nexvora-bg: #080d12;
   --color-nexvora-surface: #0d141b;
-  --color-nexvora-surface-2: #111b24;
+  --color-nexvora-surface-2: #121b24;
   --color-nexvora-accent: #00e5a8;
+  --color-nexvora-accent-pressed: #00c790;
   --color-nexvora-gold: #d4af37;
-  --color-nexvora-text: #e8f0ee;
+  --color-nexvora-danger: #ff4757;
+  --color-nexvora-text: #f2f7f5;
   --color-nexvora-muted: #8fa3a0;
   --color-nexvora-border: #1e2d38;
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* Spec: Inter is the UI font; Space Grotesk is display + numerals
+     (wordmark, pairing codes, timers). */
+  --font-sans: var(--font-inter), Arial, Helvetica, sans-serif;
+  --font-display: var(--font-space-grotesk), var(--font-inter), Arial, sans-serif;
+  --font-mono: var(--font-space-grotesk), var(--font-inter), monospace;
 }
 
 :root {
   --background: #080d12;
-  --foreground: #e8f0ee;
+  --foreground: #f2f7f5;
 }
 
 html,
@@ -26,16 +32,92 @@ body {
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-family: var(--font-inter), Arial, Helvetica, sans-serif;
 }
 
-/* Glass effect used across dashboard cards */
+/* Spec glass: rgba(18,27,36,0.72) + blur 20px + border rgba(255,255,255,0.08). */
 .glass {
-  background: linear-gradient(160deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
-  border: 1px solid #1e2d38;
-  backdrop-filter: blur(12px);
+  background: rgba(18, 27, 36, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
 }
 
 .glow-accent {
   box-shadow: 0 0 24px rgba(0, 229, 168, 0.18);
+}
+
+/* Spec: LIVE pulse 1.6s infinite. */
+@keyframes nexvora-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
+}
+
+.live-dot {
+  animation: nexvora-live-pulse 1.6s ease-in-out infinite;
+}
+
+/* Spec: sheets slide up 220ms from bottom. */
+@keyframes nexvora-sheet-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.sheet-up {
+  animation: nexvora-sheet-up 220ms ease-out;
+}
+
+/* Spec: screenshot flash — 120ms white overlay. */
+@keyframes nexvora-flash {
+  from {
+    opacity: 0.85;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.flash-overlay {
+  animation: nexvora-flash 120ms ease-out forwards;
+}
+
+/* Spec: press 150ms ease-out, scale 0.97–0.98. */
+.pressable {
+  transition:
+    transform 150ms ease-out,
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    box-shadow 150ms ease-out,
+    opacity 150ms ease-out;
+}
+
+.pressable:active {
+  transform: scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot,
+  .sheet-up,
+  .flash-overlay {
+    animation: none;
+  }
+  .pressable {
+    transition: none;
+  }
+  .pressable:active {
+    transform: none;
+  }
 }
