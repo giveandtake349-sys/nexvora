@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jsonError, requireAuth, clientIp } from "@/lib/api";
+import { jsonError, requireAuth, clientIp, isUuid, invalidIdResponse, readJsonBody } from "@/lib/api";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { logSecurityEvent, logSessionEvent } from "@/lib/audit";
 import {
@@ -31,12 +31,18 @@ export async function POST(
   if ("response" in auth) return auth.response;
   const { db, user } = auth.ctx;
   const { id } = await params;
+  if (!isUuid(id)) return invalidIdResponse();
 
   const limit = checkRateLimit(`session-state:${user.id}:${id}`, 30, 60_000);
   if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);
 
-  const body = await request.json().catch(() => ({}));
-  const target: unknown = body.state;
+  const parsedBody = await readJsonBody(request);
+  if (!parsedBody.ok) return parsedBody.response;
+  const body = parsedBody.body;
+  const target: unknown =
+    body !== null && typeof body === "object"
+      ? (body as Record<string, unknown>).state
+      : undefined;
   if (
     !isSignalingState(target) ||
     (target !== "connecting" && target !== "live" && target !== "ended")
@@ -60,18 +66,28 @@ export async function POST(
   }
 
   const now = new Date().toISOString();
+  // Atomic guard: the row must still be in the `from` state. Two
+  // concurrent POSTs could otherwise both pass the transition check
+  // and the second would overwrite the first's state. rowCount 0
+  // means the other request won — answer 409, never apply it twice.
+  let updatedRows: number;
   if (to === "ended") {
-    await db.query(
+    const res = await db.query(
       `update public.remote_sessions
        set signaling_state = 'ended', status = 'ended', ended_at = $1
-       where id = $2`,
-      [now, id],
+       where id = $2 and signaling_state = $3`,
+      [now, id, from],
     );
+    updatedRows = res.rowCount;
   } else {
-    await db.query(
-      `update public.remote_sessions set signaling_state = $1 where id = $2`,
-      [to, id],
+    const res = await db.query(
+      `update public.remote_sessions set signaling_state = $1 where id = $2 and signaling_state = $3`,
+      [to, id, from],
     );
+    updatedRows = res.rowCount;
+  }
+  if (updatedRows === 0) {
+    return jsonError("Session state was already changed by another request", 409);
   }
 
   await logSessionEvent(db, {

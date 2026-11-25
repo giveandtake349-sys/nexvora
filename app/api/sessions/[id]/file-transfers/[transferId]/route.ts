@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jsonError, requireAuth, clientIp } from "@/lib/api";
+import { jsonError, requireAuth, clientIp, isUuid, invalidIdResponse, readJsonBody } from "@/lib/api";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { logSecurityEvent, logSessionEvent } from "@/lib/audit";
 import { loadSessionForParty } from "@/lib/signaling";
@@ -38,11 +38,14 @@ export async function PATCH(
   if ("response" in auth) return auth.response;
   const { db, user } = auth.ctx;
   const { id, transferId } = await params;
+  if (!isUuid(id) || !isUuid(transferId)) return invalidIdResponse();
 
   const limit = checkRateLimit(`session-file-status:${user.id}:${id}`, 30, 60_000);
   if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);
 
-  const body = await request.json().catch(() => ({}));
+  const parsedBody = await readJsonBody(request);
+  if (!parsedBody.ok) return parsedBody.response;
+  const body = parsedBody.body;
   const validated = validateFileTransferStatusBody(body);
   if (!validated.ok) return jsonError(validated.error, validated.status);
 
@@ -76,20 +79,28 @@ export async function PATCH(
       };
     }
     const now = new Date().toISOString();
+    // Atomic guard: the row must still be in the `from` status. Two
+    // concurrent PATCHes both passing the in-transaction check could
+    // otherwise both move the transfer (double-approve / double-end).
+    // rowCount 0 means the other request won — answer 409, never apply
+    // the transition twice.
     const updated = await tx.query<FileTransfer>(
       `update public.file_transfers
        set status = $1, completed_at = case when $1 = 'completed' then $2 else completed_at end
-       where id = $3
+       where id = $3 and status = $4
        returning id, session_id, sender_user_id, receiver_user_id, device_id,
          file_name, file_size_bytes, storage_path, status, created_at, completed_at`,
-      [validated.status, now, transferId],
+      [validated.status, now, transferId, transfer.status],
     );
     const row = updated.rows[0];
-    if (!row) throw new Error("FILE_TRANSFER_UPDATE_FAILED");
+    if (!row) return { kind: "concurrent" as const };
     return { kind: "ok" as const, transfer: row, from: transfer.status };
   });
 
   if (result.kind === "not_found") return jsonError("File transfer not found", 404);
+  if (result.kind === "concurrent") {
+    return jsonError("File transfer was already updated by another request", 409);
+  }
   if (result.kind === "invalid_transition") {
     return jsonError(
       `Cannot move a transfer from ${result.from} to ${result.to}`,

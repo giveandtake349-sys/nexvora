@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jsonError, requireAuth, clientIp } from "@/lib/api";
+import { jsonError, requireAuth, clientIp, isUuid, readJsonBody } from "@/lib/api";
 import {
   hashPairingValue,
   checkPairingUsability,
@@ -40,7 +40,12 @@ export async function POST(request: NextRequest) {
     return jsonError("Too many pairing attempts. Try again in a few minutes.", 429);
   }
 
-  const body = await request.json().catch(() => ({}));
+  const parsedBody = await readJsonBody(request);
+  if (!parsedBody.ok) return parsedBody.response;
+  const body =
+    parsedBody.body !== null && typeof parsedBody.body === "object"
+      ? (parsedBody.body as Record<string, unknown>)
+      : {};
   const code = typeof body.code === "string" ? body.code.trim() : "";
   if (!/^\d{6}$/.test(code)) return jsonError("A 6-digit pairing code is required", 400);
 
@@ -101,6 +106,9 @@ export async function POST(request: NextRequest) {
       if (targetDevice.owner_id === user.id) throw new Error("OWN_DEVICE");
 
       const deviceId = typeof body.deviceId === "string" ? body.deviceId : null;
+      if (deviceId && !isUuid(deviceId)) {
+        throw new Error("BAD_DEVICE_ID");
+      }
       const inserted = await tx.query<ConnectionRequest>(
         `insert into public.connection_requests
            (requester_user_id, requester_device_id, target_device_id, owner_id, requested_scopes, status)
@@ -125,6 +133,9 @@ export async function POST(request: NextRequest) {
     }
     if (code_ === "OWN_DEVICE") {
       return jsonError("You cannot pair with your own device this way — use My Devices instead.", 400);
+    }
+    if (code_ === "BAD_DEVICE_ID") {
+      return jsonError("deviceId must be a valid device id", 400);
     }
     console.error("[pairing] redeem transaction failed:", error);
     return jsonError("Could not redeem this pairing code.", 500);

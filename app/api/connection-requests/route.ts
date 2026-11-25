@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { requireAuth } from "@/lib/api";
+import { jsonError, requireAuth } from "@/lib/api";
+import { checkRateLimit } from "@/lib/rate-limit";
 import type { ConnectionRequest } from "@/lib/types";
 
 /**
@@ -12,6 +13,9 @@ export async function GET(request: NextRequest) {
   if ("response" in auth) return auth.response;
   const { db, user } = auth.ctx;
   const role = request.nextUrl.searchParams.get("role") ?? "owner";
+
+  const limit = checkRateLimit(`connection-requests:list:${user.id}`, 120, 60_000);
+  if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);
 
   const column = role === "requester" ? "requester_user_id" : "owner_id";
   const { rows } = await db.query<ConnectionRequest>(

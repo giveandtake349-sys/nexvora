@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jsonError, requireAuth, clientIp } from "@/lib/api";
+import { jsonError, requireAuth, clientIp, isUuid, invalidIdResponse, readJsonBody, MAX_SIGNAL_RAW_BODY_BYTES } from "@/lib/api";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { logSecurityEvent, logSessionEvent } from "@/lib/audit";
 import {
@@ -45,11 +45,14 @@ export async function POST(
   if ("response" in auth) return auth.response;
   const { db, user } = auth.ctx;
   const { id } = await params;
+  if (!isUuid(id)) return invalidIdResponse();
 
   const limit = checkRateLimit(`session-signal:${user.id}:${id}`, 120, 60_000);
   if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);
 
-  const body = await request.json().catch(() => ({}));
+  const parsedBody = await readJsonBody(request, MAX_SIGNAL_RAW_BODY_BYTES);
+  if (!parsedBody.ok) return parsedBody.response;
+  const body = parsedBody.body;
   const validated = validateSignalBody(body);
   if (!validated.ok) return jsonError(validated.error, validated.status);
 
@@ -136,6 +139,7 @@ export async function GET(
   if ("response" in auth) return auth.response;
   const { db, user } = auth.ctx;
   const { id } = await params;
+  if (!isUuid(id)) return invalidIdResponse();
 
   const limit = checkRateLimit(`session-poll:${user.id}:${id}`, 120, 60_000);
   if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);

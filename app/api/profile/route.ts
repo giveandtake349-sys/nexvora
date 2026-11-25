@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jsonError, requireAuth } from "@/lib/api";
+import { jsonError, requireAuth, readJsonBody } from "@/lib/api";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 /**
  * PATCH /api/profile — update the signed-in user's display name.
@@ -14,7 +15,16 @@ export async function PATCH(request: NextRequest) {
   const auth = await requireAuth();
   if ("response" in auth) return auth.response;
   const { db, user } = auth.ctx;
-  const body = await request.json().catch(() => ({}));
+
+  const limit = checkRateLimit(`profile:update:${user.id}`, 30, 60_000);
+  if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);
+
+  const parsedBody = await readJsonBody(request);
+  if (!parsedBody.ok) return parsedBody.response;
+  const body =
+    parsedBody.body !== null && typeof parsedBody.body === "object"
+      ? (parsedBody.body as Record<string, unknown>)
+      : {};
   const displayName = typeof body.displayName === "string" ? body.displayName.trim().slice(0, 80) : "";
   if (!displayName) return jsonError("Display name is required", 400);
 

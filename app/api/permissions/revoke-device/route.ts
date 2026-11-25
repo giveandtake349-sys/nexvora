@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jsonError, requireAuth, clientIp } from "@/lib/api";
+import { jsonError, requireAuth, clientIp, isUuid, invalidIdResponse, readJsonBody } from "@/lib/api";
+import { checkRateLimit } from "@/lib/rate-limit";
 import { logSecurityEvent } from "@/lib/audit";
 
 /**
@@ -11,9 +12,19 @@ export async function POST(request: NextRequest) {
   const auth = await requireAuth();
   if ("response" in auth) return auth.response;
   const { db, user } = auth.ctx;
-  const body = await request.json().catch(() => ({}));
+
+  const limit = checkRateLimit(`permissions:revoke-device:${user.id}`, 10, 60_000);
+  if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);
+
+  const parsedBody = await readJsonBody(request);
+  if (!parsedBody.ok) return parsedBody.response;
+  const body =
+    parsedBody.body !== null && typeof parsedBody.body === "object"
+      ? (parsedBody.body as Record<string, unknown>)
+      : {};
   const deviceId = typeof body.deviceId === "string" ? body.deviceId : "";
   if (!deviceId) return jsonError("deviceId is required", 400);
+  if (!isUuid(deviceId)) return invalidIdResponse();
 
   const device = await db.query<{ id: string }>(
     `select id from public.devices where id = $1 and owner_id = $2 limit 1`,

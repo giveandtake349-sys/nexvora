@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jsonError, requireAuth, clientIp } from "@/lib/api";
+import { jsonError, requireAuth, clientIp, isUuid, invalidIdResponse, readJsonBody } from "@/lib/api";
+import { checkRateLimit } from "@/lib/rate-limit";
 import { logSecurityEvent, logSessionEvent } from "@/lib/audit";
 import type { RemoteSession } from "@/lib/types";
 
@@ -11,9 +12,19 @@ export async function POST(request: NextRequest) {
   const auth = await requireAuth();
   if ("response" in auth) return auth.response;
   const { db, user } = auth.ctx;
-  const body = await request.json().catch(() => ({}));
+
+  const limit = checkRateLimit(`sessions:disconnect:${user.id}`, 30, 60_000);
+  if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);
+
+  const parsedBody = await readJsonBody(request);
+  if (!parsedBody.ok) return parsedBody.response;
+  const body =
+    parsedBody.body !== null && typeof parsedBody.body === "object"
+      ? (parsedBody.body as Record<string, unknown>)
+      : {};
   const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
   if (!sessionId) return jsonError("sessionId is required", 400);
+  if (!isUuid(sessionId)) return invalidIdResponse();
 
   const sessionRes = await db.query<RemoteSession>(
     `select * from public.remote_sessions where id = $1 limit 1`,
@@ -30,7 +41,7 @@ export async function POST(request: NextRequest) {
   await db.query(
     `update public.remote_sessions
      set status = 'ended', signaling_state = 'ended', ended_at = $1
-     where id = $2`,
+     where id = $2 and status = 'active'`,
     [now, sessionId],
   );
 

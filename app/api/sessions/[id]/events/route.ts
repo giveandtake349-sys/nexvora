@@ -1,10 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jsonError, requireAuth, clientIp } from "@/lib/api";
+import { jsonError, requireAuth, clientIp, isUuid, invalidIdResponse, readJsonBody } from "@/lib/api";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { logSecurityEvent, logSessionEvent } from "@/lib/audit";
 import { loadSessionForParty } from "@/lib/signaling";
 import {
   AUDIT_ACTION_SCOPE,
+  shouldLogSecurityEvent,
   validateSessionEventBody,
 } from "@/lib/live-features";
 import { isGrantValid, type DevicePermissionGrant } from "@/lib/permissions";
@@ -31,11 +32,14 @@ export async function POST(
   if ("response" in auth) return auth.response;
   const { db, user } = auth.ctx;
   const { id } = await params;
+  if (!isUuid(id)) return invalidIdResponse();
 
   const limit = checkRateLimit(`session-events:${user.id}:${id}`, 30, 60_000);
   if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);
 
-  const body = await request.json().catch(() => ({}));
+  const parsedBody = await readJsonBody(request);
+  if (!parsedBody.ok) return parsedBody.response;
+  const body = parsedBody.body;
   const validated = validateSessionEventBody(body);
   if (!validated.ok) return jsonError(validated.error, validated.status);
 
@@ -68,7 +72,7 @@ export async function POST(
     action: validated.action,
     details: validated.details,
   });
-  if (validated.action.endsWith("_started") || validated.action === "interaction.started") {
+  if (shouldLogSecurityEvent(validated.action)) {
     await logSecurityEvent(db, {
       user_id: session.owner_id,
       device_id: session.device_id,

@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { requireAuth, clientIp } from "@/lib/api";
+import { requireAuth, clientIp, jsonError } from "@/lib/api";
+import { checkRateLimit } from "@/lib/rate-limit";
 import { logSecurityEvent } from "@/lib/audit";
 
 /** POST /api/sessions/disconnect-all — end every active session I own or take part in. */
@@ -7,6 +8,10 @@ export async function POST(request: NextRequest) {
   const auth = await requireAuth();
   if ("response" in auth) return auth.response;
   const { db, user } = auth.ctx;
+
+  const limit = checkRateLimit(`sessions:disconnect-all:${user.id}`, 10, 60_000);
+  if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);
+
   const now = new Date().toISOString();
 
   const ended = await db.query<{ id: string }>(

@@ -286,6 +286,24 @@ export function validateSessionEventBody(
 }
 
 /**
+ * Which audit actions also go to security_events (not just
+ * session_events). Sharing starts are security-relevant, and so is
+ * the interaction kill-switch — the owner ending remote interaction
+ * is a security decision the Security Center must show. Stops are
+ * session_events only: they close a sharing window that was already
+ * logged at its start.
+ *
+ * Milestone 5 fix: `interaction.killed` was previously session-only.
+ */
+export function shouldLogSecurityEvent(action: LiveSessionAuditAction): boolean {
+  return (
+    action.endsWith("_started") ||
+    action === "interaction.started" ||
+    action === "interaction.killed"
+  );
+}
+
+/**
  * Which permission scope gates each audit action (owner exempt, as
  * everywhere else). The events route enforces this server-side.
  */

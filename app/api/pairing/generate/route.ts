@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jsonError, requireAuth, clientIp } from "@/lib/api";
+import { jsonError, requireAuth, clientIp, isUuid, invalidIdResponse, readJsonBody } from "@/lib/api";
 import { generatePairingCode, PAIRING_ATTEMPT_WINDOW_MS, PAIRING_MAX_ATTEMPTS } from "@/lib/pairing";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { logSecurityEvent } from "@/lib/audit";
@@ -27,10 +27,16 @@ export async function POST(request: NextRequest) {
     return jsonError("Too many pairing codes. Try again in a few minutes.", 429);
   }
 
-  const body = await request.json().catch(() => ({}));
+  const parsedBody = await readJsonBody(request);
+  if (!parsedBody.ok) return parsedBody.response;
+  const body =
+    parsedBody.body !== null && typeof parsedBody.body === "object"
+      ? (parsedBody.body as Record<string, unknown>)
+      : {};
   const deviceId = typeof body.deviceId === "string" ? body.deviceId : null;
 
   if (deviceId) {
+    if (!isUuid(deviceId)) return invalidIdResponse();
     const device = await db.query<{ id: string }>(
       `select id from public.devices where id = $1 and owner_id = $2 limit 1`,
       [deviceId, user.id],

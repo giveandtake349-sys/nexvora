@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jsonError, requireAuth, clientIp } from "@/lib/api";
+import { jsonError, requireAuth, clientIp, isUuid, invalidIdResponse, readJsonBody } from "@/lib/api";
+import { checkRateLimit } from "@/lib/rate-limit";
 import { parseUserAgent, computeDeviceFingerprint } from "@/lib/device";
 import { logSecurityEvent } from "@/lib/audit";
 import type { Device } from "@/lib/types";
@@ -9,6 +10,10 @@ export async function GET() {
   const auth = await requireAuth();
   if ("response" in auth) return auth.response;
   const { db, user } = auth.ctx;
+
+  const limit = checkRateLimit(`devices:list:${user.id}`, 120, 60_000);
+  if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);
+
   const { rows } = await db.query<Device>(
     `select * from public.devices where owner_id = $1 order by created_at desc`,
     [user.id],
@@ -26,7 +31,15 @@ export async function POST(request: NextRequest) {
   if ("response" in auth) return auth.response;
   const { db, user } = auth.ctx;
 
-  const body = await request.json().catch(() => ({}));
+  const limit = checkRateLimit(`devices:register:${user.id}`, 30, 60_000);
+  if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);
+
+  const parsedBody = await readJsonBody(request);
+  if (!parsedBody.ok) return parsedBody.response;
+  const body =
+    parsedBody.body !== null && typeof parsedBody.body === "object"
+      ? (parsedBody.body as Record<string, unknown>)
+      : {};
   const name = typeof body.name === "string" ? body.name.trim().slice(0, 80) : "";
   if (!name) return jsonError("Device name is required", 400);
 
@@ -83,6 +96,10 @@ export async function DELETE(request: NextRequest) {
   const { db, user } = auth.ctx;
   const id = request.nextUrl.searchParams.get("id");
   if (!id) return jsonError("Device id is required", 400);
+  if (!isUuid(id)) return invalidIdResponse();
+
+  const limit = checkRateLimit(`devices:remove:${user.id}`, 10, 60_000);
+  if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);
 
   const device = await db.query<{ id: string }>(
     `select id from public.devices where id = $1 and owner_id = $2 limit 1`,

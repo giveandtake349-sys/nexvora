@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jsonError, requireAuth, clientIp } from "@/lib/api";
+import { jsonError, requireAuth, clientIp, isUuid, invalidIdResponse, readJsonBody } from "@/lib/api";
+import { checkRateLimit } from "@/lib/rate-limit";
 import { defaultGrantExpiry, isPermissionScope, type PermissionScope } from "@/lib/permissions";
 import { logSecurityEvent, logSessionEvent } from "@/lib/audit";
 import type { ConnectionRequest, DevicePermission, RemoteSession } from "@/lib/types";
@@ -24,8 +25,17 @@ export async function POST(
   if ("response" in auth) return auth.response;
   const { db, user } = auth.ctx;
   const { id } = await params;
+  if (!isUuid(id)) return invalidIdResponse();
 
-  const body = await request.json().catch(() => ({}));
+  const limit = checkRateLimit(`connection-requests:approve:${user.id}`, 30, 60_000);
+  if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);
+
+  const parsedBody = await readJsonBody(request);
+  if (!parsedBody.ok) return parsedBody.response;
+  const body =
+    parsedBody.body !== null && typeof parsedBody.body === "object"
+      ? (parsedBody.body as Record<string, unknown>)
+      : {};
   const scopes: PermissionScope[] = Array.isArray(body.scopes)
     ? body.scopes.filter((s: unknown) => isPermissionScope(s))
     : [];

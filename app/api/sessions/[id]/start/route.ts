@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jsonError, requireAuth, clientIp } from "@/lib/api";
+import { jsonError, requireAuth, clientIp, isUuid, invalidIdResponse } from "@/lib/api";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { logSecurityEvent, logSessionEvent } from "@/lib/audit";
 import {
@@ -28,6 +28,7 @@ export async function POST(
   if ("response" in auth) return auth.response;
   const { db, user } = auth.ctx;
   const { id } = await params;
+  if (!isUuid(id)) return invalidIdResponse();
 
   const limit = checkRateLimit(`session-start:${user.id}`, 10, 60_000);
   if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);

@@ -60,3 +60,15 @@ export function clientIp(request: Request): string | null {
   const forwarded = request.headers.get("x-forwarded-for");
   return forwarded ? forwarded.split(",")[0].trim() : null;
 }
+
+/* Milestone 5 hardening helpers (lib/http.ts) are re-exported here
+ * so routes keep importing them from "@/lib/api". http.ts itself
+ * stays free of auth/database imports so unit tests can import it. */
+export {
+  isUuid,
+  invalidIdResponse,
+  readJsonBody,
+  MAX_SIGNAL_RAW_BODY_BYTES,
+  MAX_SMALL_JSON_BODY_BYTES,
+  type JsonBodyResult,
+} from "./http";

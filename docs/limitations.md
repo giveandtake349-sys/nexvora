@@ -1,4 +1,4 @@
-# NEXVORA — Known Limitations (Milestones 1–4)
+# NEXVORA — Known Limitations (Milestones 1–5)
 
 ## What is NOT built yet
 
@@ -11,7 +11,16 @@
 - **No TURN server** (see below) and no file storage bucket: files are
   peer-to-peer only by design, never stored server-side.
 
-## What IS built now (Milestones 2–4)
+## What IS built now (Milestones 2–5)
+
+- **Hardening** (Milestone 5): rate limits on every route, security
+  headers (no CSP — see below), malformed-uuid / oversized-body /
+  race-condition fixes, kill-switch audit, secret sweep, full
+  build + lint + test + smoke-test verification. No new features,
+  no new migration. See `MILESTONE-5-REPORT.md` — the live
+  verification checklist there is still open (migrations 0002 +
+  0003 need live application; two-browser live tests need a
+  browser + live Neon).
 
 - **WebRTC signaling** (Milestone 2): DB-backed, short-polled
   offer/answer/ICE over `/api/sessions/[id]/signal`, with per-party
@@ -96,10 +105,24 @@
 - **Online/offline status** is derived from `last_seen_at` heartbeats
   (online = seen in the last 5 minutes). It is not a live socket presence
   signal in Milestone 1.
-- **Rate limiting** for pairing endpoints is in-memory per server instance.
-  On a multi-instance deployment it must move into Postgres (or Redis) —
-  the limiter is a single function (`lib/rate-limit.ts`) so the swap is
-  one file.
+- **Rate limiting** is in-memory per server instance (Milestone 5:
+  every route is now limited — see the table in
+  `lib/rate-limit.ts`). On a multi-instance deployment it must move
+  into Postgres (or Redis) — the limiter is a single function
+  (`lib/rate-limit.ts`) so the swap is one file. Do not present it
+  as distributed rate limiting.
+- **No Content-Security-Policy yet** (Milestone 5, deliberate): a
+  strict CSP needs per-request nonces plumbed through `proxy.ts`
+  for Next.js's inline runtime scripts and Tailwind v4's injected
+  styles. That cannot be verified safe from this build VM (no
+  browser), and an unverified CSP risks breaking the app in
+  production — so the other four headers shipped and CSP is a
+  future item for a browser-verified pass.
+- **Raw request-body caps** (Milestone 5): signaling bodies are
+  capped at 128 KiB raw (64 KiB payload + wrapper) and all other
+  JSON bodies at 16 KiB, enforced before JSON.parse — the semantic
+  caps (64 KiB signal payload, 2 KiB audit details) were previously
+  only checked after an unbounded parse.
 - **Login history** in the Security Center is sourced from the audit log in
   Milestone 1. A dedicated auth-event table is a Milestone 2 hardening item;
   no login rows are invented.

@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jsonError, requireAuth, clientIp } from "@/lib/api";
+import { jsonError, requireAuth, clientIp, isUuid, invalidIdResponse, readJsonBody } from "@/lib/api";
+import { checkRateLimit } from "@/lib/rate-limit";
 import { defaultGrantExpiry, isPermissionScope } from "@/lib/permissions";
 import { logSecurityEvent } from "@/lib/audit";
 import type { DevicePermission } from "@/lib/types";
@@ -13,6 +14,10 @@ export async function GET(request: NextRequest) {
   if ("response" in auth) return auth.response;
   const { db, user } = auth.ctx;
   const role = request.nextUrl.searchParams.get("role") ?? "owner";
+
+  const limit = checkRateLimit(`permissions:list:${user.id}`, 120, 60_000);
+  if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);
+
   const column = role === "granted" ? "granted_to_user_id" : "owner_id";
   const { rows } = await db.query<DevicePermission>(
     `select * from public.device_permissions
@@ -32,21 +37,37 @@ export async function POST(request: NextRequest) {
   const auth = await requireAuth();
   if ("response" in auth) return auth.response;
   const { db, user } = auth.ctx;
-  const body = await request.json().catch(() => ({}));
+
+  const limit = checkRateLimit(`permissions:grant:${user.id}`, 30, 60_000);
+  if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);
+
+  const parsedBody = await readJsonBody(request);
+  if (!parsedBody.ok) return parsedBody.response;
+  const body =
+    parsedBody.body !== null && typeof parsedBody.body === "object"
+      ? (parsedBody.body as Record<string, unknown>)
+      : {};
   const { deviceId, grantedToUserId, scope } = body;
   if (typeof deviceId !== "string" || typeof grantedToUserId !== "string" || !isPermissionScope(scope)) {
     return jsonError("deviceId, grantedToUserId and a valid scope are required", 400);
   }
+  if (!isUuid(deviceId)) return invalidIdResponse();
   const device = await db.query<{ id: string }>(
     `select id from public.devices where id = $1 and owner_id = $2 limit 1`,
     [deviceId, user.id],
   );
   if (!device.rows[0]) return jsonError("Device not found", 404);
 
-  const expiresAt =
-    typeof body.expiresAt === "string" && body.expiresAt
-      ? body.expiresAt
-      : defaultGrantExpiry().toISOString();
+  // expiresAt comes from the client: a garbage string would make
+  // Postgres reject the insert with a 500, so validate it first.
+  let expiresAt = defaultGrantExpiry().toISOString();
+  if (typeof body.expiresAt === "string" && body.expiresAt) {
+    const parsed = new Date(body.expiresAt);
+    if (Number.isNaN(parsed.getTime())) {
+      return jsonError("expiresAt must be a valid ISO date string", 400);
+    }
+    expiresAt = parsed.toISOString();
+  }
   const { rows } = await db.query<DevicePermission>(
     `insert into public.device_permissions
        (owner_id, device_id, granted_to_user_id, scope, expires_at, is_revoked)
@@ -82,6 +103,10 @@ export async function DELETE(request: NextRequest) {
   const { db, user } = auth.ctx;
   const id = request.nextUrl.searchParams.get("id");
   if (!id) return jsonError("Permission id is required", 400);
+  if (!isUuid(id)) return invalidIdResponse();
+
+  const limit = checkRateLimit(`permissions:revoke:${user.id}`, 30, 60_000);
+  if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);
 
   const grantRes = await db.query<DevicePermission>(
     `select * from public.device_permissions where id = $1 and owner_id = $2 limit 1`,

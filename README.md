@@ -1,12 +1,15 @@
 # NEXVORA — ONE ECOSYSTEM. EVERY DEVICE.
 
 Premium remote device access and management platform.
-**Milestone 4 (this repo state):** brand foundation, landing page, authentication,
+**Milestone 5 (this repo state):** brand foundation, landing page, authentication,
 database, device registration, secure pairing, approval and revocation,
 DB-backed WebRTC signaling (Milestone 2), live screen / camera /
-microphone / speaker over WebRTC (Milestone 3), and file transfer /
+microphone / speaker over WebRTC (Milestone 3), file transfer /
 location sharing / remote interaction / notification feed in live
-sessions (Milestone 4).
+sessions (Milestone 4), and hardening + final verification of the
+whole platform (Milestone 5): rate limits on every route, security
+headers, audit-log completeness, malformed-input and race-condition
+fixes — no new features, no new migration.
 
 > File transfer / location / remote interaction / notifications are
 > **live in Milestone 4** — in the same live session as screen /
@@ -225,8 +228,57 @@ valid scopes; the client never decides grant validity.
   interaction start/stop/kill are written via `POST
   /api/sessions/[id]/events` (allowlisted actions only, details
   capped at 2 KiB, scope-checked server-side) to `session_events`
-  (+ `security_events` for starts), visible in the Security Center.
+  (+ `security_events` for starts **and for the interaction
+  kill-switch** — Milestone 5), visible in the Security Center.
   File-transfer lifecycle events are written by the transfer routes.
+
+## Milestone 5 — hardening (no new features, no new migration)
+
+- **Rate limits on every route** (`lib/rate-limit.ts` carries the full
+  table): pairing 5 per user per 10 min; device / request / permission /
+  profile / disconnect writes 10–30/min per user, list reads 120/min;
+  session start 10/min; signal send and poll 120/min per user per
+  session (the client polls every ~2s ≈ 30/min, so 120/min is 4x
+  headroom); heartbeat 60/min (client beats every ~10s ≈ 6/min, 10x
+  headroom); state / file-status / events 30/min; file offers 10/min.
+  **Known limit: the limiter is in-memory per server instance** — on a
+  multi-instance deployment it must move into Postgres or Redis.
+- **Security headers** (`next.config.ts`, verified by curl on the
+  production build): `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: strict-origin-when-cross-origin`,
+  `Permissions-Policy: camera=(self), microphone=(self),
+  geolocation=(self), display-capture=(self)` (the app's own media
+  capture runs on its own origin and is unaffected),
+  `X-Frame-Options: DENY`. **No Content-Security-Policy** — a strict
+  CSP needs per-request nonces for Next.js's inline runtime scripts
+  and Tailwind v4's injected styles, and that cannot be verified safe
+  without a real browser pass; see `docs/limitations.md`.
+- **Malformed input can no longer 500:** every uuid id (session,
+  device, transfer, connection request, permission) is validated
+  before it reaches Postgres (a malformed uuid used to raise 22P02
+  and surface as a 500 — now a 404); every JSON body is read through
+  a capped reader (`lib/http.ts`: 128 KiB raw cap for signaling,
+  16 KiB for everything else — 413 over the cap, 400 for malformed
+  JSON); `expiresAt` on direct grants must be a valid date.
+- **Race conditions closed:** the file-transfer status update and
+  the signaling-state update are conditional on the row still being
+  in the expected state (`WHERE status = $from` /
+  `WHERE signaling_state = $from`); a concurrent second request gets
+  409 instead of a double-approve / double-end. Rejecting a
+  connection request is likewise conditional on it still being
+  pending.
+- **Audit completeness:** the interaction kill-switch now also
+  writes to `security_events` (it was session-only). Heartbeats and
+  signal polls are deliberately NOT audited — that would be log spam
+  at 30 polls/min per party.
+- **Secret sweep:** no real credentials anywhere in the repo —
+  `.env.example` and tests carry placeholders only (see
+  `MILESTONE-5-REPORT.md`).
+- **Verification:** `npm run build`, `npm run lint`, `npm test`
+  (142 tests) and a local production smoke test all pass — see
+  `MILESTONE-5-REPORT.md` for the full output and the consolidated
+  live-verification checklist (migrations 0002 + 0003 still need live
+  application; two-browser live tests still need a browser + live Neon).
 
 ## How the Trusted Device system works
 
