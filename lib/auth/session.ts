@@ -23,8 +23,15 @@ export interface SessionUser {
  * error }`. The SDK's own bundled NEXT-JS.md guide shows the bare
  * `{ session, user }` shape instead, so both are normalised here —
  * if the SDK changes shape again this still resolves the user.
+ *
+ * `ensureProfile` (default true) runs the lazy profile upsert in its
+ * own transaction. Callers that already hold a user transaction
+ * (getDashboardData) pass false and do the upsert inside that
+ * transaction instead — one database connection per page, not two.
  */
-export async function getSessionUser(): Promise<SessionUser | null> {
+export async function getSessionUser(
+  options: { ensureProfile?: boolean } = {},
+): Promise<SessionUser | null> {
   if (!isAuthConfigured()) return null;
   const auth = getAuth();
   if (!auth) return null;
@@ -46,7 +53,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   // trigger). Best-effort: a failed upsert must never block the request.
   // Only the email is refreshed on conflict — display_name belongs to
   // the user and is edited via PATCH /api/profile.
-  if (isDatabaseConfigured()) {
+  if (options.ensureProfile !== false && isDatabaseConfigured()) {
     try {
       await withUser(sessionUser.id, async (db) => {
         await db.query(
