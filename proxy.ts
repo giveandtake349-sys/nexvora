@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getAuth } from "@/lib/auth/server";
+import { PUBLIC_ROUTES } from "@/lib/public-routes";
 
 /**
  * Next.js 16 route protection (the old middleware.ts convention is
@@ -24,7 +25,7 @@ export async function proxy(request: NextRequest) {
   if (!auth) return NextResponse.next();
   const middleware = auth.middleware({
     loginUrl: "/login",
-    publicRoutes: ["/", "/login", "/register", "/forgot-password", "/reset-password"],
+    publicRoutes: PUBLIC_ROUTES,
   });
   return middleware(request);
 }

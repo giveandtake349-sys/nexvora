@@ -67,6 +67,7 @@ export function clientIp(request: Request): string | null {
 export {
   isUuid,
   invalidIdResponse,
+  parseRoleQueryParam,
   readJsonBody,
   MAX_SIGNAL_RAW_BODY_BYTES,
   MAX_SMALL_JSON_BODY_BYTES,

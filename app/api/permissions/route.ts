@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jsonError, requireAuth, clientIp, isUuid, invalidIdResponse, readJsonBody } from "@/lib/api";
+import { jsonError, requireAuth, clientIp, isUuid, invalidIdResponse, parseRoleQueryParam, readJsonBody } from "@/lib/api";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { defaultGrantExpiry, isPermissionScope } from "@/lib/permissions";
 import { logSecurityEvent } from "@/lib/audit";
@@ -13,7 +13,9 @@ export async function GET(request: NextRequest) {
   const auth = await requireAuth();
   if ("response" in auth) return auth.response;
   const { db, user } = auth.ctx;
-  const role = request.nextUrl.searchParams.get("role") ?? "owner";
+  const parsedRole = parseRoleQueryParam(request.nextUrl.searchParams.get("role"), ["owner", "granted"]);
+  if (!parsedRole.ok) return jsonError(parsedRole.error, 400);
+  const role = parsedRole.role;
 
   const limit = checkRateLimit(`permissions:list:${user.id}`, 120, 60_000);
   if (!limit.allowed) return jsonError("Too many requests. Try again shortly.", 429);

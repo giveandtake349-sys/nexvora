@@ -39,6 +39,27 @@ export function invalidIdResponse() {
   return httpError("Not found", 404);
 }
 
+/**
+ * Validate a `?role=` list parameter (permissions, connection
+ * requests). A bogus role must never silently fall through to the
+ * owner view — that used to happen: any value other than the
+ * "granted"/"requester" branch was treated as "owner", so
+ * ?role=bogus returned owner data. Absent defaults to "owner".
+ */
+export function parseRoleQueryParam(
+  raw: string | null,
+  allowedRoles: readonly string[],
+): { ok: true; role: string } | { ok: false; error: string } {
+  const role = raw ?? "owner";
+  if (!allowedRoles.includes(role)) {
+    return {
+      ok: false,
+      error: `role must be one of: ${allowedRoles.map((r) => `"${r}"`).join(", ")}`,
+    };
+  }
+  return { ok: true, role };
+}
+
 /** Raw JSON-body size caps. */
 export const MAX_SIGNAL_RAW_BODY_BYTES = 128 * 1024; // 64 KiB payload + wrapper
 export const MAX_SMALL_JSON_BODY_BYTES = 16 * 1024; // state / events / transfers / M1 writes
