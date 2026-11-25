@@ -3,9 +3,9 @@ import LiveControlDemo from "@/components/LiveControlDemo";
 import { PERMISSION_SCOPES, SCOPE_LABELS } from "@/lib/permissions";
 import { isAuthConfigured, isDatabaseConfigured } from "@/lib/db/config";
 
-// Direct download (not the Drive viewer page, which does not install the APK on mobile).
+// Direct download from our own Vercel Blob store — no Google Drive page in between.
 const APK_URL =
-  "https://drive.google.com/uc?export=download&id=1LWUCQ4DzV5dYArnd9lohyjWaffO2Q8Gs";
+  "https://l4olg2qubqwtv2jv.public.blob.vercel-storage.com/NEXVORA-v0.1.0.apk";
 
 const DOWNLOAD_PILL =
   "inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#00E5A8]";
