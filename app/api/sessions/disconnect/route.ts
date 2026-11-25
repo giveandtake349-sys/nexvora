@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
   const now = new Date().toISOString();
   await db.query(
     `update public.remote_sessions
-     set status = 'ended', ended_at = $1
+     set status = 'ended', signaling_state = 'ended', ended_at = $1
      where id = $2`,
     [now, sessionId],
   );

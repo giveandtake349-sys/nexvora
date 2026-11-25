@@ -79,6 +79,11 @@ In the Neon dashboard → SQL Editor (or with `psql` against
 1. `db/migrations/0001_init.sql` — all 10 tables, indexes, forced RLS
    policies, `current_app_user_id()` helper. Profile rows are created by
    the app on first sign-in (lazy upsert) — there is no auth trigger.
+2. `db/migrations/0002_signaling.sql` — Milestone 2: the
+   `signaling_messages` table + `signaling_message_seq` sequence,
+   `signaling_state` and per-party heartbeat columns on
+   `remote_sessions`, forced RLS on the new table. Run it after 0001,
+   once, on the same database.
 
 `db/seed.sql` is **demo data only** — do not run it against production.
 

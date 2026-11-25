@@ -22,6 +22,7 @@ export const PERMISSION_SCOPES = [
   "location",
   "remote_interaction",
   "device_info",
+  "notifications",
 ] as const;
 
 export type PermissionScope = (typeof PERMISSION_SCOPES)[number];
@@ -35,6 +36,7 @@ export const SCOPE_LABELS: Record<PermissionScope, string> = {
   location: "Location Sharing",
   remote_interaction: "Remote Interaction",
   device_info: "Device Information",
+  notifications: "Notifications",
 };
 
 export const SCOPE_DESCRIPTIONS: Record<PermissionScope, string> = {
@@ -46,6 +48,8 @@ export const SCOPE_DESCRIPTIONS: Record<PermissionScope, string> = {
   location: "See the device location while sharing is active. Live in Milestone 4.",
   remote_interaction: "Interact with the remote device. Live in Milestone 4.",
   device_info: "See device name, OS, browser and last-seen status.",
+  notifications:
+    "Owner-granted only, with a visible indicator on the device and instant revocation. See the device's notification feed, including Messenger notification previews, while sharing is active. Live in Milestone 4.",
 };
 
 /** Milestone in which the scope becomes usable for live access. */
@@ -58,6 +62,7 @@ export const SCOPE_MILESTONE: Record<PermissionScope, number> = {
   location: 4,
   remote_interaction: 4,
   device_info: 1,
+  notifications: 4,
 };
 
 export function isPermissionScope(value: unknown): value is PermissionScope {

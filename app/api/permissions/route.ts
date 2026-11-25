@@ -104,7 +104,7 @@ export async function DELETE(request: NextRequest) {
     // no privileged client needed.
     await tx.query(
       `update public.remote_sessions
-       set status = 'revoked', ended_at = $1
+       set status = 'revoked', signaling_state = 'revoked', ended_at = $1
        where device_id = $2 and participant_user_id = $3 and status = 'active'`,
       [now, grant.device_id, grant.granted_to_user_id],
     );

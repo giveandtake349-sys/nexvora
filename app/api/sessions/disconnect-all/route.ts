@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
 
   const ended = await db.query<{ id: string }>(
     `update public.remote_sessions
-     set status = 'ended', ended_at = $1
+     set status = 'ended', signaling_state = 'ended', ended_at = $1
      where status = 'active'
        and (owner_id = $2 or participant_user_id = $2)
      returning id`,

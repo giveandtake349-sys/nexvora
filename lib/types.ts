@@ -76,6 +76,8 @@ export interface DevicePermission {
 
 export type RemoteSessionStatus = "active" | "ended" | "revoked";
 
+export type SignalingState = "created" | "connecting" | "live" | "ended" | "revoked";
+
 export interface RemoteSession {
   id: string;
   connection_request_id: string | null;
@@ -85,6 +87,34 @@ export interface RemoteSession {
   status: RemoteSessionStatus;
   started_at: string;
   ended_at: string | null;
+  /** Milestone 2: WebRTC signaling lifecycle (see lib/signaling.ts). */
+  signaling_state: SignalingState;
+  /** Per-party heartbeats — one shared column could not tell the
+   *  parties apart, so each side has its own (Milestone 2). */
+  owner_last_heartbeat_at: string | null;
+  participant_last_heartbeat_at: string | null;
+}
+
+export type SignalingMessageKind =
+  | "offer"
+  | "answer"
+  | "ice-candidate"
+  | "bye"
+  | "session-state";
+
+/** One DB-backed signaling message (Milestone 2). `seq` comes from the
+ *  global signaling_message_seq sequence: strictly increasing across
+ *  all sessions, so polling with `after=<seq>` never misses or
+ *  double-delivers a message. */
+export interface SignalingMessage {
+  id: string;
+  session_id: string;
+  sender_user_id: string;
+  recipient_user_id: string;
+  kind: SignalingMessageKind;
+  payload: Record<string, unknown>;
+  seq: number;
+  created_at: string;
 }
 
 export interface SecurityEvent {

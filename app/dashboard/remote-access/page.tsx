@@ -12,10 +12,12 @@ import { RevokePermissionButton } from "@/components/DashboardActions";
 export const dynamic = "force-dynamic";
 
 /**
- * Milestone 1 remote-access workspace: permission shell only.
- * There is NO live media in Milestone 1, so every live card shows
- * Disconnected. A card shows "Granted" only when a real, valid grant
- * exists — never an active state without a real connection.
+ * Milestone 2 remote-access workspace: permission shell + signaling.
+ * There is NO live media in Milestone 2, so every live card shows
+ * Disconnected. Session signaling (offer/answer/ICE over the API) is
+ * ready in Milestone 2; screen/camera/mic still arrive in Milestone 3.
+ * A card shows "Granted" only when a real, valid grant exists — never
+ * an active state without a real connection.
  */
 export default async function RemoteAccessPage() {
   const data = await getDashboardData();
@@ -48,7 +50,7 @@ export default async function RemoteAccessPage() {
                 <p className="mt-2 text-sm text-[#8FA3A0]">{SCOPE_DESCRIPTIONS[scope]}</p>
                 <div className="mt-3 flex items-center gap-2 text-sm">
                   <span className="inline-block h-2 w-2 rounded-full bg-[#8FA3A0]" />
-                  <span className="text-[#8FA3A0]">Disconnected — no live connection in Milestone 1</span>
+                  <span className="text-[#8FA3A0]">Disconnected — no live media yet. Session signaling is ready in Milestone 2; screen / camera arrive in Milestone 3</span>
                 </div>
                 {grant && (
                   <p className="mt-2 text-xs text-[#8FA3A0]">

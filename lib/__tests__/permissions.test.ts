@@ -3,6 +3,9 @@ import {
   checkGrantValidity,
   defaultGrantExpiry,
   isGrantValid,
+  isPermissionScope,
+  PERMISSION_SCOPES,
+  SCOPE_MILESTONE,
   splitScopesByValidity,
   DEFAULT_GRANT_DAYS,
   type DevicePermissionGrant,
@@ -74,5 +77,35 @@ describe("reconnect reuse — only new scopes need approval", () => {
     const result = splitScopesByValidity(["screen"], [], deviceId, now);
     expect(result.alreadyGranted).toEqual([]);
     expect(result.needsApproval).toEqual(["screen"]);
+  });
+});
+
+describe("notifications scope (9th scope, Milestone 2)", () => {
+  it("is a valid permission scope alongside the original 8", () => {
+    expect(PERMISSION_SCOPES).toHaveLength(9);
+    expect(isPermissionScope("notifications")).toBe(true);
+    // The original 8 are untouched.
+    for (const scope of [
+      "screen",
+      "camera",
+      "microphone",
+      "speaker",
+      "file_transfer",
+      "location",
+      "remote_interaction",
+      "device_info",
+    ]) {
+      expect(isPermissionScope(scope)).toBe(true);
+    }
+  });
+
+  it("is wired through Milestone 4 like the other sharing scopes", () => {
+    expect(SCOPE_MILESTONE.notifications).toBe(4);
+  });
+
+  it("a notifications grant validates like any other grant", () => {
+    expect(checkGrantValidity(grant({ scope: "notifications" }), deviceId, now)).toBe(
+      "valid",
+    );
   });
 });

@@ -9,7 +9,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { SCHEMA_TABLES, RLS_USER_FUNCTION } from "../db/schema";
+import { SCHEMA_TABLES, SCHEMA_TABLES_0002, RLS_USER_FUNCTION } from "../db/schema";
 
 describe("db/config", () => {
   const ORIGINAL_ENV = { ...process.env };
@@ -102,6 +102,67 @@ describe("migration consistency (no live DB)", () => {
     expect(migration).toContain("id text primary key"); // profiles.id
     expect(migration).toContain("owner_id text not null");
     expect(migration).toContain("id uuid primary key default gen_random_uuid()");
+  });
+});
+
+describe("migration 0002_signaling consistency (no live DB)", () => {
+  const migration = readFileSync(
+    join(process.cwd(), "db/migrations/0002_signaling.sql"),
+    "utf8",
+  );
+
+  it("defines the signaling_messages table", () => {
+    for (const table of SCHEMA_TABLES_0002) {
+      expect(migration).toContain(`create table public.${table} (`);
+    }
+    expect(migration).toContain("create sequence public.signaling_message_seq");
+    expect(migration).toContain("seq bigint not null default nextval('public.signaling_message_seq')");
+    expect(migration).toContain("sender_user_id text not null");
+    expect(migration).toContain("recipient_user_id text not null");
+    expect(migration).toContain("payload jsonb not null");
+  });
+
+  it("forces RLS on the new table and restricts it to the two session parties", () => {
+    expect(migration).toContain("alter table public.signaling_messages enable row level security;");
+    expect(migration).toContain("alter table public.signaling_messages force row level security;");
+    expect(migration).toContain("signaling_messages_select_parties");
+    expect(migration).toContain("signaling_messages_insert_sender");
+    expect(migration).toContain(RLS_USER_FUNCTION);
+  });
+
+  it("adds the lifecycle columns to remote_sessions and backfills live sessions", () => {
+    expect(migration).toContain("signaling_state text not null default 'created'");
+    expect(migration).toContain("owner_last_heartbeat_at timestamptz");
+    expect(migration).toContain("participant_last_heartbeat_at timestamptz");
+    expect(migration).toContain(
+      "update public.remote_sessions set signaling_state = 'live' where status = 'active'",
+    );
+  });
+
+  it("does not touch the 0001 tables or reference Supabase", () => {
+    expect(migration).not.toContain("create table public.profiles");
+    expect(migration).not.toContain("auth.users");
+    expect(migration).not.toContain("auth.uid()");
+  });
+
+  it("extends the device_permissions scope CHECK to the 9th scope", () => {
+    expect(migration).toContain(
+      "alter table public.device_permissions drop constraint if exists device_permissions_scope_check",
+    );
+    expect(migration).toContain("'notifications'");
+    // All 8 original scopes stay in the new CHECK.
+    for (const scope of [
+      "screen",
+      "camera",
+      "microphone",
+      "speaker",
+      "file_transfer",
+      "location",
+      "remote_interaction",
+      "device_info",
+    ]) {
+      expect(migration).toContain(`'${scope}'`);
+    }
   });
 });
 

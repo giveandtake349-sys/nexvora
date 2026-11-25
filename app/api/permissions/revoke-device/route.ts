@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     );
     await tx.query(
       `update public.remote_sessions
-       set status = 'revoked', ended_at = $1
+       set status = 'revoked', signaling_state = 'revoked', ended_at = $1
        where device_id = $2 and status = 'active'`,
       [now, deviceId],
     );

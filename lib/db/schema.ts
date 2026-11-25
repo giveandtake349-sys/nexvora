@@ -20,7 +20,10 @@ export const SCHEMA_TABLES = [
   "file_transfers",
 ] as const;
 
-export type SchemaTable = (typeof SCHEMA_TABLES)[number];
+/** Tables added by db/migrations/0002_signaling.sql (Milestone 2). */
+export const SCHEMA_TABLES_0002 = ["signaling_messages"] as const;
+
+export type SchemaTable = (typeof SCHEMA_TABLES)[number] | (typeof SCHEMA_TABLES_0002)[number];
 
 /** The RLS helper the migration defines and every policy uses. */
 export const RLS_USER_FUNCTION = "public.current_app_user_id()";
