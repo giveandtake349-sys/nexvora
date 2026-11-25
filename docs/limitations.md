@@ -1,20 +1,57 @@
-# NEXVORA — Known Limitations (Milestone 1)
+# NEXVORA — Known Limitations (Milestones 1–3)
 
 ## What is NOT built yet
 
-- **No live screen sharing, camera, microphone, or speaker output.** These are
-  Milestone 3. The Remote Access cards show them as Disconnected with a
-  "Live in Milestone 3" badge. A NEXVORA permission grant alone never turns
-  on a camera or microphone.
 - **No file transfer, location sharing, or remote interaction.** Milestone 4.
   The `file_transfers` table and RLS policies exist already; the transfer
   flow and its storage (deferred to Milestone 4 — no Storage bucket exists
   yet in the Neon setup) do not.
-- **No WebRTC signaling / live session media.** Milestone 2.
 - **No native Android app.** Milestone 6. The schema carries a `platform`
   field (`web` | `android` | `ios` | `desktop`) so Android trusted-device
   authorization can be added later, subject to Android's permission and
   background-execution restrictions.
+
+## What IS built now (Milestones 2–3)
+
+- **WebRTC signaling** (Milestone 2): DB-backed, short-polled
+  offer/answer/ICE over `/api/sessions/[id]/signal`, with per-party
+  heartbeats and grant re-checks on every send and delivery.
+- **Live screen / camera / microphone / speaker** (Milestone 3): one
+  `RTCPeerConnection` per live session (`/dashboard/sessions/[id]`),
+  owner-started screen share via `getDisplayMedia`, camera/mic via
+  `getUserMedia`, mute state + track started/stopped + kill-switch over
+  the `nexvora-control` data channel, speaker playback separate from
+  the microphone mute. Live-verified? **Not yet** — the two-browser
+  call test, the screen-share OS dialog test, and the revoke-mid-call
+  test are still pending (no browser / no Neon access from the build
+  VM). See `MILESTONE-3-REPORT.md`.
+
+## Live-media limitations (Milestone 3, honest)
+
+- **STUN only — no TURN server.** The peer connection uses only the
+  public Google STUN server (`stun:stun.l.google.com:19302`). No TURN
+  credentials exist and none is faked. Direct peer-to-peer connections
+  can fail when both sides sit behind symmetric NATs or restrictive
+  firewalls: the UI shows a clear failure state with a manual Retry
+  button. A TURN server is a future deployment item.
+- **ICE candidates that arrive before the remote description is set**
+  are queued and flushed once it is set; a candidate that still fails
+  to apply is dropped (ICE keeps gathering — not fatal).
+- **Renegotiation when the owner adds a track mid-call** is triggered
+  by the participant on receiving the `track-started` control message
+  (or a `session-state` signaling message if the data channel is not
+  open yet). If the data channel and the signaling fallback both fail
+  to reach the participant, the new track is not picked up until the
+  next renegotiation or retry.
+- **Leaving the page without pressing End** does not send a `bye` —
+  the peer learns about it from the stale heartbeat (peer-disconnected
+  after 30s) and the dropped peer connection.
+- **Speaker scope interpretation:** playing the remote audio on this
+  device requires the `speaker` scope (or being the device owner).
+  The scope's original Milestone 1 wording ("play audio on the remote
+  device speaker") is about remote output; in the Milestone 3 live
+  session it gates local playback of the incoming audio, because that
+  is the speaker control the web session actually has.
 
 ## Browser limitations
 

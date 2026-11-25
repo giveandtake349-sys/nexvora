@@ -93,7 +93,12 @@ export default async function DashboardPage() {
               {activeSessions.slice(0, 5).map((s) => (
                 <li key={s.id} className="flex items-center justify-between gap-3 text-sm">
                   <span className="text-[#E8F0EE]">Session started {new Date(s.started_at).toLocaleString()}</span>
-                  <Badge tone="green">Active</Badge>
+                  <span className="flex items-center gap-2">
+                    <Badge tone="green">Active</Badge>
+                    <Button variant="outline" href={`/dashboard/sessions/${s.id}`}>
+                      Join live session
+                    </Button>
+                  </span>
                 </li>
               ))}
             </ul>

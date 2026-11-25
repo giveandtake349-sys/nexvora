@@ -1,13 +1,14 @@
 # NEXVORA — ONE ECOSYSTEM. EVERY DEVICE.
 
 Premium remote device access and management platform.
-**Milestone 1 (this repo state):** brand foundation, landing page, authentication,
-database, device registration, secure pairing, approval and revocation.
+**Milestone 3 (this repo state):** brand foundation, landing page, authentication,
+database, device registration, secure pairing, approval and revocation,
+DB-backed WebRTC signaling (Milestone 2), and live screen / camera /
+microphone / speaker over WebRTC (Milestone 3).
 
-> Live screen / camera / microphone / speaker (Milestone 3) and file transfer /
-> location / remote interaction (Milestone 4) are **not** built yet. The Remote
-> Access workspace shows them as Disconnected / "Coming in Milestone 3/4" —
-> never as active.
+> File transfer / location / remote interaction (Milestone 4) are **not**
+> built yet. The Remote Access workspace shows them as Disconnected /
+> "Coming in Milestone 4" — never as active.
 
 ## Stack
 
@@ -85,6 +86,11 @@ In the Neon dashboard → SQL Editor (or with `psql` against
    `remote_sessions`, forced RLS on the new table. Run it after 0001,
    once, on the same database.
 
+No new migration in Milestone 3: live media rides on the Milestone 2
+signaling tables (offer/answer/ICE/bye over the API) and on one WebRTC
+data channel (`nexvora-control`) for mute/track/kill-switch control
+messages — nothing new is stored server-side.
+
 `db/seed.sql` is **demo data only** — do not run it against production.
 
 ### 5. Run
@@ -95,6 +101,54 @@ npm run dev
 
 Sign up, verify your email, register a device, generate a pairing code, and
 approve/reject requests from a second account.
+
+## How live sessions work (Milestone 3)
+
+An approved session (created by the Milestone 1 approval flow) can be
+joined from Remote Access or the Overview page — **Join live session**
+opens `/dashboard/sessions/[id]`. Joining calls the Milestone 2 start
+endpoint; it never creates a session. One `RTCPeerConnection` is then
+established over the Milestone 2 signaling API (short-polled offer /
+answer / ICE, 2s interval, exponential backoff on poll failures). The
+participant creates the offer; the device owner answers — a fixed
+initiator, so the handshake can never glare.
+
+- **Screen:** the owner starts it from the live session with an
+  explicit button click (`getDisplayMedia`). The browser/OS system
+  dialog + persistent OS indicator appear; cancelling the dialog is a
+  silent no-op. Stopping — button or the browser's own "Stop sharing" —
+  removes the track and notifies the peer.
+- **Camera / microphone:** `getUserMedia`, same explicit-click rule.
+  Mute (mic) and camera on/off actually enable/disable the tracks and
+  are signalled to the peer over the `nexvora-control` data channel.
+- **Speaker:** the remote audio plays in its own `<audio>` element
+  with a separate mute + volume slider. It is never conflated with the
+  microphone mute. Playing remote audio needs the `speaker` scope (or
+  being the device owner).
+- **Grant model:** a side may publish a track only for a scope it holds
+  a live grant for (owner exempt on their own device). The server page
+  computes the valid scopes; the client never decides grant validity.
+- **Revocation / disconnect:** a poll reporting `grantsValid: false`,
+  a 403, a `bye`, a stale peer heartbeat (30s) after the call was live,
+  or the server ending the session all tear the peer connection down
+  immediately, stop every local track, and show a clear state
+  ("Access revoked", "Peer disconnected", "Session ended"). ICE failure
+  shows a failure state with a manual **Retry** button — nothing
+  retries in a loop.
+- **ICE:** public Google STUN only (`stun:stun.l.google.com:19302`).
+  **There is no TURN server** — no credentials exist for one and none
+  is faked. Direct peer-to-peer connections can fail when both sides
+  sit behind symmetric NATs or restrictive firewalls; a TURN server is
+  a future deployment item.
+- **Data channel:** one channel, `nexvora-control`, carries mute state,
+  track started/stopped, and the owner kill-switch. Milestone 4 will
+  extend this same channel for file transfer / location / remote
+  interaction — no second channel is planned.
+
+No stealth mode exists anywhere in this app: no hidden indicators, no
+silent screen capture, no bypass of OS consent. See `docs/limitations.md`
+and `MILESTONE-3-REPORT.md` for what is still unverified live (two-browser
+call test, screen-share OS dialog test, revoke-mid-call test).
 
 ## How the Trusted Device system works
 
@@ -145,10 +199,16 @@ app/                  Routes: landing, auth pages, dashboard pages, /api/*
   api/permissions/    list, grant, revoke one grant, revoke whole device
   api/sessions/       disconnect one, disconnect all
   api/profile/        update display name
-components/           ui.tsx (brand system), DashboardShell, AuthForms, DashboardActions
+  api/sessions/       disconnect one, disconnect all, start / signal /
+                      heartbeat / state (Milestone 2 signaling)
+components/           ui.tsx (brand system), DashboardShell, AuthForms, DashboardActions,
+                      LiveSession (Milestone 3 live call view)
 lib/                  db/ (Neon pool + config), auth/ (Neon Auth server/client/session),
                       permissions, pairing, rate-limit, device helpers,
-                      audit logging, API auth helper
+                      audit logging, API auth helper, signaling (M2 helpers),
+                      signaling-client (M3 browser signaling client),
+                      webrtc (M3 pure WebRTC rules: ICE, control channel,
+                      phase machine, grant model)
   __tests__/          Vitest unit tests
 db/migrations/        0001_init.sql (10 tables + forced RLS)
 db/seed.sql           Demo data only — never run on production

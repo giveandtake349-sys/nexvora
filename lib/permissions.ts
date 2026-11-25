@@ -40,10 +40,14 @@ export const SCOPE_LABELS: Record<PermissionScope, string> = {
 };
 
 export const SCOPE_DESCRIPTIONS: Record<PermissionScope, string> = {
-  screen: "View the remote device screen. Live in Milestone 3.",
-  camera: "View the remote camera stream. Live in Milestone 3.",
-  microphone: "Hear live audio from the remote microphone. Live in Milestone 3.",
-  speaker: "Play audio on the remote device speaker. Live in Milestone 3.",
+  screen:
+    "View the remote device screen while the owner is sharing it. The owner starts sharing from their own browser — a grant alone never turns a screen on. Live in Milestone 3.",
+  camera:
+    "View the remote camera stream while the owner has it on. Live in Milestone 3.",
+  microphone:
+    "Hear live audio from the remote microphone while it is on. Live in Milestone 3.",
+  speaker:
+    "Hear the remote audio on this device while a live session is running. Speaker volume and mute are separate from the microphone. Live in Milestone 3.",
   file_transfer: "Send and receive files. Live in Milestone 4.",
   location: "See the device location while sharing is active. Live in Milestone 4.",
   remote_interaction: "Interact with the remote device. Live in Milestone 4.",
