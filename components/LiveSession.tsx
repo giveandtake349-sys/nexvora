@@ -51,6 +51,24 @@ import {
   type LiveSessionAuditAction,
   type LocationFix,
 } from "@/lib/live-features";
+import {
+  MAX_RECORDING_DURATION_MS,
+  RECORDING_CHUNK_TIMESLICE_MS,
+  assembleRecordingBlob,
+  formatRecordingDuration,
+  hasRecordableTrack,
+  pickRecordingMimeType,
+  pickRecordingTracks,
+  shouldAutoStopRecording,
+  transitionRecordingConsent,
+  type RecordingConsentEvent,
+  type RecordingConsentState,
+} from "@/lib/recording";
+import {
+  buildRecordingMeta,
+  saveRecording,
+  type RecordingVideoKind,
+} from "@/lib/recordings";
 import type { PermissionScope } from "@/lib/permissions";
 import type { SignalingMessage, SignalingState } from "@/lib/types";
 
@@ -100,6 +118,15 @@ interface RemoteTrackView {
   slot: "screen" | "camera" | "microphone";
   kind: "video" | "audio";
   stream: MediaStream;
+}
+
+/**
+ * Module-scope clock. Component-scope functions must never call
+ * Date.now() directly (react-hooks/purity forbids impure calls
+ * there); every timestamp in this file goes through this helper.
+ */
+function nowMs(): number {
+  return Date.now();
 }
 
 const ACTIVE_PHASES: LivePhase[] = ["waiting", "connecting", "live", "reconnecting"];
@@ -196,6 +223,13 @@ export default function LiveSession({
   const [notificationFeed, setNotificationFeed] = useState<DeviceNotification[]>([]);
   const [peerSharingNotifications, setPeerSharingNotifications] = useState(false);
 
+  /* ---------------- Session recording (v1) state ---------------- */
+  const [recordingState, setRecordingState] = useState<RecordingConsentState>("idle");
+  const [peerRecording, setPeerRecording] = useState(false);
+  const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
+  const [recordingSavedAt, setRecordingSavedAt] = useState<number | null>(null);
+
   const phaseRef = useRef<LivePhase>("idle");
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
@@ -228,6 +262,15 @@ export default function LiveSession({
   const allowInteractionRef = useRef(false);
   const peerAllowsInteractionRef = useRef(false);
   const remoteScreenBoxRef = useRef<HTMLDivElement | null>(null);
+  const recordingStateRef = useRef<RecordingConsentState>("idle");
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const recordingStartedAtRef = useRef<number | null>(null);
+  const recordingMimeRef = useRef("");
+  const recordingVideoKindRef = useRef<RecordingVideoKind>("none");
+  const recordingHasAudioRef = useRef(false);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
 
   const audioAllowed = canPlayRemoteAudio(grantedScopes, isOwner);
   const remoteScreen = remoteTracks.find((t) => t.slot === "screen" && t.kind === "video");
@@ -237,6 +280,13 @@ export default function LiveSession({
   const remoteCameraOn = Boolean(remoteCamera);
   const remoteMicOn = Boolean(remoteAudio);
   const joined = ACTIVE_PHASES.includes(phase) || phase === "failed" || phase === "peer-disconnected";
+
+  /** Render-time check: is any remote track live right now? Derived
+   *  from STATE (remoteTracks), never from refs — refs must not be
+   *  read during render (react-hooks/refs). */
+  const remoteTracksLiveNow = remoteTracks.some((t) =>
+    t.stream.getTracks().some((track) => track.readyState === "live"),
+  );
 
   /* ---------------- phase + teardown ---------------- */
 
@@ -312,6 +362,7 @@ export default function LiveSession({
       clearInterval(heartbeatRef.current);
       heartbeatRef.current = null;
     }
+    stopRecordingForTeardown();
     if (fileChannelRef.current) {
       try {
         fileChannelRef.current.close();
@@ -345,6 +396,7 @@ export default function LiveSession({
 
   function teardownPeerOnly(): void {
     negotiationGateRef.current.reset();
+    stopRecordingForTeardown();
     if (fileChannelRef.current) {
       try {
         fileChannelRef.current.close();
@@ -527,7 +579,7 @@ export default function LiveSession({
       case "interaction-pointer":
         // Rendered as a remote-cursor overlay on my shared view —
         // visible, in-page only, never injected as input.
-        setRemoteCursor({ x: message.x, y: message.y, kind: message.kind, at: Date.now() });
+        setRemoteCursor({ x: message.x, y: message.y, kind: message.kind, at: nowMs() });
         break;
       case "interaction-key":
         setInteractionKeys((keys) => [...keys.slice(-19), message.key]);
@@ -554,6 +606,55 @@ export default function LiveSession({
             receivedAt: message.receivedAt,
           }),
         );
+        break;
+      /* ---------------- Session recording (v1) ---------------- */
+      case "recording-request":
+        // Only the owner decides. A request while one is pending, or
+        // while a recording is already running, is ignored — the
+        // requester keeps their current state.
+        if (!isOwner) break;
+        if (recordingStateRef.current !== "idle") break;
+        applyRecordingEvent("request-received");
+        break;
+      case "recording-approve":
+        if (isOwner) break;
+        if (recordingStateRef.current !== "requested") break;
+        // The owner approved: start now. If starting fails (no live
+        // tracks / browser cannot record), go back to idle with an
+        // honest error instead of pretending to record.
+        void (async () => {
+          if (await startRecording()) applyRecordingEvent("approve-received");
+          else applyRecordingEvent("reset");
+        })();
+        break;
+      case "recording-decline":
+        if (isOwner) break;
+        if (recordingStateRef.current !== "requested") break;
+        applyRecordingEvent("decline-received");
+        break;
+      case "recording-started":
+        // The peer started recording: show the indicator. (My own
+        // recording-started is never echoed back — the peer sends
+        // theirs only when THEY record.)
+        setPeerRecording(true);
+        break;
+      case "recording-stopped":
+        setPeerRecording(false);
+        break;
+      case "recording-revoke":
+        // The owner ended my recording: stop immediately, no
+        // negotiation. A revoke while I am only waiting for approval
+        // drops the request.
+        if (isOwner) break;
+        if (recordingStateRef.current === "recording") stopRecording("revoked");
+        else if (recordingStateRef.current === "requested") applyRecordingEvent("revoke-received");
+        setPeerRecording(false);
+        break;
+      case "recording-cancel":
+        // The requester withdrew a pending request (owner side only).
+        if (!isOwner) break;
+        if (recordingStateRef.current !== "pending") break;
+        applyRecordingEvent("decline");
         break;
     }
   }
@@ -913,6 +1014,233 @@ export default function LiveSession({
     // Single keys and short named keys only; never the whole input.
     if (event.key.length > 32) return;
     sendControl({ type: "interaction-key", key: event.key });
+  }
+
+  /* ---------------- Session recording (v1) ---------------- */
+
+  /** Keep the consent-machine ref and state in sync. */
+  function setRecording(next: RecordingConsentState): void {
+    recordingStateRef.current = next;
+    setRecordingState(next);
+  }
+
+  function applyRecordingEvent(event: RecordingConsentEvent): void {
+    setRecording(transitionRecordingConsent(recordingStateRef.current, event));
+  }
+
+  /**
+   * MediaRecorder's onstop handler: assemble the chunks, save the
+   * .webm to this browser's IndexedDB, and audit the stop. Runs on
+   * every stop (user, owner revoke, 1-hour cap, session teardown) —
+   * the audit is posted here exactly once per recording, and a save
+   * failure is reported honestly instead of pretending the file
+   * exists.
+   */
+  async function finishRecording(): Promise<void> {
+    const startedAt = recordingStartedAtRef.current;
+    const chunks = recordingChunksRef.current;
+    const mimeType = recordingMimeRef.current;
+    const videoKind = recordingVideoKindRef.current;
+    const hasAudio = recordingHasAudioRef.current;
+    recordingChunksRef.current = [];
+    recordingStartedAtRef.current = null;
+    mediaRecorderRef.current = null;
+    recordingStreamRef.current = null;
+    const endedAt = nowMs();
+    const durationMs = startedAt === null ? 0 : Math.max(0, endedAt - startedAt);
+    let saved = false;
+    let sizeBytes = 0;
+    if (startedAt !== null && chunks.length > 0) {
+      const blob = assembleRecordingBlob(chunks, mimeType);
+      sizeBytes = blob.size;
+      const meta = buildRecordingMeta({
+        id: crypto.randomUUID(),
+        sessionId,
+        deviceName,
+        startedAt,
+        endedAt,
+        sizeBytes: blob.size,
+        mimeType: blob.type,
+        videoKind,
+        hasAudio,
+      });
+      try {
+        await saveRecording({ ...meta, chunks });
+        saved = true;
+        setRecordingSavedAt(endedAt);
+      } catch {
+        setRecordingError(
+          "Recording stopped, but saving it to this browser failed (storage may be full). The recording is lost.",
+        );
+      }
+    }
+    void postSessionEvent("recording.stopped", {
+      durationMs,
+      sizeBytes,
+      saved,
+    });
+  }
+
+  /**
+   * Build the recording stream and start MediaRecorder. Returns true
+   * only when recording actually started — the caller applies the
+   * consent transition (idle --start--> recording for the owner,
+   * requested --approve-received--> recording for the participant).
+   * On failure nothing is recorded and the caller keeps its state.
+   */
+  async function startRecording(): Promise<boolean> {
+    setRecordingError(null);
+    if (typeof MediaRecorder === "undefined") {
+      setRecordingError("Recording is not supported in this browser.");
+      return false;
+    }
+    const screen = remoteTracksRef.current.find((t) => t.slot === "screen" && t.kind === "video");
+    const camera = remoteTracksRef.current.find((t) => t.slot === "camera" && t.kind === "video");
+    const audio = remoteTracksRef.current.find((t) => t.slot === "microphone");
+    const screenTrack = screen?.stream.getVideoTracks()[0] ?? null;
+    const cameraTrack = camera?.stream.getVideoTracks()[0] ?? null;
+    const audioTrack = audio?.stream.getAudioTracks()[0] ?? null;
+    const pick = pickRecordingTracks({ screen: screenTrack, camera: cameraTrack, audio: audioTrack });
+    if (!hasRecordableTrack(pick)) {
+      setRecordingError(
+        "Nothing to record yet — the other side is not sharing screen, camera or microphone.",
+      );
+      return false;
+    }
+    const tracks: MediaStreamTrack[] = [];
+    if (pick.video) tracks.push(pick.video as MediaStreamTrack);
+    if (pick.audio) tracks.push(pick.audio as MediaStreamTrack);
+    const stream = new MediaStream(tracks);
+    recordingStreamRef.current = stream;
+    const mimeType = pickRecordingMimeType((m) => {
+      try {
+        return MediaRecorder.isTypeSupported(m);
+      } catch {
+        return false;
+      }
+    });
+    recordingMimeRef.current = mimeType;
+    recordingVideoKindRef.current = pick.video
+      ? pick.video === screenTrack
+        ? "screen"
+        : "camera"
+      : "none";
+    recordingHasAudioRef.current = pick.audio !== null;
+    let recorder: MediaRecorder;
+    try {
+      recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    } catch {
+      setRecordingError("Could not start recording in this browser.");
+      return false;
+    }
+    recordingChunksRef.current = [];
+    recordingStartedAtRef.current = nowMs();
+    mediaRecorderRef.current = recorder;
+    recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) recordingChunksRef.current.push(event.data);
+    };
+    recorder.onstop = () => {
+      void finishRecording();
+    };
+    try {
+      recorder.start(RECORDING_CHUNK_TIMESLICE_MS);
+    } catch {
+      setRecordingError("Could not start recording in this browser.");
+      mediaRecorderRef.current = null;
+      recordingStartedAtRef.current = null;
+      return false;
+    }
+    setRecordingElapsedMs(0);
+    setRecordingSavedAt(null);
+    sendControl({ type: "recording-started" });
+    void postSessionEvent("recording.started", {
+      videoKind: recordingVideoKindRef.current,
+      hasAudio: recordingHasAudioRef.current,
+    });
+    return true;
+  }
+
+  /** Stop an active recording. The save + audit happen in onstop
+   *  (finishRecording) — this only stops the recorder and tells the
+   *  peer, so every stop path funnels through one place. */
+  function stopRecording(reason: "user" | "revoked" | "limit" | "teardown"): void {
+    if (recordingStateRef.current !== "recording") return;
+    setRecording("stopped");
+    if (reason !== "teardown") sendControl({ type: "recording-stopped" });
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      try {
+        recorder.stop();
+      } catch {
+        // Already stopped — onstop still fires and saves.
+      }
+    }
+    if (reason === "revoked") {
+      setRecordingError("The device owner stopped the recording.");
+    } else if (reason === "limit") {
+      setRecordingError(
+        `Recording stopped automatically after ${Math.round(MAX_RECORDING_DURATION_MS / 3600000)} hour (the v1 limit).`,
+      );
+    }
+  }
+
+  /** Session teardown (revoke / end / unmount): stop the recorder
+   *  without notifying the peer — the channel is closing — but the
+   *  onstop save still runs, so a recording is not lost because the
+   *  session ended. Pending requests are simply dropped. */
+  function stopRecordingForTeardown(): void {
+    if (recordingStateRef.current === "recording") {
+      stopRecording("teardown");
+    } else if (
+      recordingStateRef.current === "requested" ||
+      recordingStateRef.current === "pending"
+    ) {
+      setRecording("idle");
+    }
+    setPeerRecording(false);
+  }
+
+  /** Participant: ask the owner. Owner: self-approved, start at once. */
+  async function requestRecording(): Promise<void> {
+    setRecordingError(null);
+    if (!controlOpen || !joined) return;
+    if (isOwner) {
+      if (await startRecording()) applyRecordingEvent("start");
+      return;
+    }
+    if (recordingStateRef.current !== "idle" && recordingStateRef.current !== "declined") return;
+    sendControl({ type: "recording-request" });
+    applyRecordingEvent("request");
+  }
+
+  /** Participant: withdraw a still-pending request. */
+  function cancelRecordingRequest(): void {
+    if (recordingStateRef.current !== "requested") return;
+    sendControl({ type: "recording-cancel" });
+    applyRecordingEvent("stop");
+  }
+
+  /** Owner: approve the pending request. The participant starts. */
+  function approveRecordingRequest(): void {
+    if (recordingStateRef.current !== "pending") return;
+    sendControl({ type: "recording-approve" });
+    applyRecordingEvent("approve");
+  }
+
+  /** Owner: decline the pending request. */
+  function declineRecordingRequest(): void {
+    if (recordingStateRef.current !== "pending") return;
+    sendControl({ type: "recording-decline" });
+    applyRecordingEvent("decline");
+  }
+
+  /** Owner: end the other side's recording right now. If I am also
+   *  recording, stop mine too — a revoke is a revoke for everyone. */
+  function revokeRecording(): void {
+    if (!isOwner) return;
+    sendControl({ type: "recording-revoke" });
+    setPeerRecording(false);
+    if (recordingStateRef.current === "recording") stopRecording("user");
   }
 
   async function flushPendingIce(): Promise<void> {
@@ -1461,6 +1789,33 @@ export default function LiveSession({
     el.volume = speakerVolume / 100;
   }, [speakerMuted, speakerVolume, audioAllowed, remoteAudio]);
 
+  // Recording elapsed timer + 1-hour auto-stop. Runs only while
+  // recording; the interval is cleared on every other state. The
+  // timer reads refs only, so a stale closure cannot stop the wrong
+  // recording.
+  useEffect(() => {
+    if (recordingState !== "recording") {
+      if (recordingTimerRef.current !== null) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+      return;
+    }
+    const startedAt = recordingStartedAtRef.current ?? nowMs();
+    recordingTimerRef.current = setInterval(() => {
+      const elapsed = nowMs() - startedAt;
+      setRecordingElapsedMs(elapsed);
+      if (shouldAutoStopRecording(elapsed)) stopRecording("limit");
+    }, 1000);
+    return () => {
+      if (recordingTimerRef.current !== null) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recordingState]);
+
   /* ---------------- render ---------------- */
 
   const phaseTone: Record<LivePhase, "green" | "gold" | "red" | "muted" | "blue"> =
@@ -1494,6 +1849,12 @@ export default function LiveSession({
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {(recordingState === "recording" || peerRecording) && (
+              <span className="inline-flex items-center gap-2 rounded-full border border-red-400/40 bg-red-500/10 px-2.5 py-0.5 text-xs font-semibold text-red-300">
+                <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-500" />
+                REC — this session is being recorded
+              </span>
+            )}
             {phase === "live" && (
               <span className="inline-flex items-center gap-2 rounded-full border border-[#00E5A8]/30 bg-[#00E5A8]/10 px-2.5 py-0.5 text-xs font-semibold text-[#00E5A8]">
                 <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-[#00E5A8]" />
@@ -1511,7 +1872,9 @@ export default function LiveSession({
           and approve the browser prompt. Stop anytime here, or from the browser&apos;s own
           sharing indicator. The same rule covers file transfer (every file needs the other
           side&apos;s approval), location (explicit start + browser prompt), and remote
-          interaction (in-page cursor only, stoppable instantly).
+          interaction (in-page cursor only, stoppable instantly). Recording (below) also needs
+          the device owner&apos;s approval in-session, shows a REC indicator on both sides, and
+          saves only in the recorder&apos;s browser.
         </div>
 
         {phase === "idle" && (
@@ -2103,6 +2466,114 @@ export default function LiveSession({
                     </li>
                   ))}
                 </ul>
+              )}
+            </Card>
+
+            {/* ---------- Session recording (v1) ---------- */}
+            <Card>
+              <h3 className="font-semibold text-white">
+                Session recording{" "}
+                <Badge tone={recordingState === "recording" || peerRecording ? "red" : "muted"}>
+                  {recordingState === "recording"
+                    ? "Recording"
+                    : peerRecording
+                      ? "Peer recording"
+                      : "Off"}
+                </Badge>
+              </h3>
+              <p className="mt-1 text-xs text-[#8FA3A0]">
+                Records the remote screen/camera + microphone into a .webm file saved only in
+                this browser — nothing is uploaded to the server. Starts only after the device
+                owner approves in-session, stops instantly if the owner revokes, and never runs
+                longer than 1 hour.
+              </p>
+              {(recordingState === "recording" || peerRecording) && (
+                <p className="mt-3 inline-flex items-center gap-2 rounded-full border border-red-400/40 bg-red-500/10 px-2.5 py-0.5 text-xs font-semibold text-red-300">
+                  <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-500" />
+                  REC
+                  {recordingState === "recording"
+                    ? ` — recording ${formatRecordingDuration(recordingElapsedMs)}`
+                    : " — the other side is recording this session"}
+                </p>
+              )}
+              {recordingState === "pending" && isOwner && (
+                <div className="mt-3 rounded-lg border border-[#D4AF37]/40 bg-[#D4AF37]/10 p-3 text-sm">
+                  <p className="font-semibold text-white">
+                    The other side wants to record this session
+                  </p>
+                  <p className="mt-1 text-xs text-[#8FA3A0]">
+                    Recording captures the remote screen/camera + microphone into a .webm saved in
+                    their browser only. Approve only if you are comfortable with that — you can
+                    revoke it mid-recording.
+                  </p>
+                  <div className="mt-2 flex gap-2">
+                    <Button variant="primary" onClick={approveRecordingRequest}>
+                      Approve recording
+                    </Button>
+                    <Button variant="outline" onClick={declineRecordingRequest}>
+                      Decline
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {recordingState === "requested" && (
+                <>
+                  <p className="mt-3 text-sm text-[#8FA3A0]">
+                    Waiting for the device owner to approve recording…
+                  </p>
+                  <div className="mt-2">
+                    <Button variant="outline" onClick={cancelRecordingRequest}>
+                      Cancel request
+                    </Button>
+                  </div>
+                </>
+              )}
+              {recordingState === "declined" && (
+                <p className="mt-3 text-sm text-red-300">
+                  The device owner declined recording.
+                </p>
+              )}
+              {(recordingState === "idle" ||
+                recordingState === "declined" ||
+                recordingState === "stopped") && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    disabled={!joined || !controlOpen || !remoteTracksLiveNow}
+                    onClick={() => void requestRecording()}
+                  >
+                    {isOwner ? "Record remote session" : "Ask to record"}
+                  </Button>
+                </div>
+              )}
+              {recordingState === "recording" && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button variant="danger" onClick={() => stopRecording("user")}>
+                    Stop recording
+                  </Button>
+                </div>
+              )}
+              {isOwner && peerRecording && recordingState !== "recording" && (
+                <div className="mt-3">
+                  <Button variant="danger" onClick={revokeRecording}>
+                    Stop the other side&apos;s recording
+                  </Button>
+                </div>
+              )}
+              {!remoteTracksLiveNow && recordingState === "idle" && (
+                <p className="mt-2 text-xs text-[#8FA3A0]">
+                  Start the other side&apos;s screen, camera or microphone first — there is
+                  nothing to record yet.
+                </p>
+              )}
+              {recordingError && <p className="mt-2 text-sm text-red-300">{recordingError}</p>}
+              {recordingSavedAt !== null && recordingState === "stopped" && (
+                <p className="mt-3 text-sm text-[#00E5A8]">
+                  Recording saved in this browser.{" "}
+                  <a href="/dashboard/recordings" className="font-semibold underline">
+                    View recordings
+                  </a>
+                </p>
               )}
             </Card>
           </div>

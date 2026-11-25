@@ -13,14 +13,16 @@ import { isGrantValid, type DevicePermissionGrant } from "@/lib/permissions";
 /**
  * POST /api/sessions/[id]/events — write one Milestone 4 audit event
  * for a live session (location / notification sharing start-stop,
- * remote-interaction start/stop/kill). Body: { action, details? }.
+ * remote-interaction start/stop/kill, session recording start/stop).
+ * Body: { action, details? }.
  *
- * Only the seven actions in lib/live-features.ts are accepted, and
+ * Only the nine actions in lib/live-features.ts are accepted, and
  * details are capped at 2 KiB — a client cannot inject arbitrary
  * audit rows. The caller must be a party of an active session AND
- * hold a live grant for the action's scope (owner exempt). The event
- * is written to session_events (visible in the Security Center) and,
- * for sharing starts, also to security_events.
+ * hold a live grant for the action's scope (owner exempt; recording
+ * actions accept any live screen / camera / microphone grant). The
+ * event is written to session_events (visible in the Security Center)
+ * and, for sharing starts, also to security_events.
  *
  * Rate limit: 30 events per user per session per minute.
  */
@@ -53,15 +55,33 @@ export async function POST(
 
   const scope = AUDIT_ACTION_SCOPE[validated.action];
   if (user.id !== session.owner_id) {
-    const grants = await db.query<DevicePermissionGrant>(
-      `select device_id, scope, is_revoked, revoked_at, expires_at
-       from public.device_permissions
-       where device_id = $1 and granted_to_user_id = $2 and scope = $3 and is_revoked = false`,
-      [session.device_id, user.id, scope],
-    );
+    // "any-media" (recording): the caller must hold a live grant for
+    // at least one of screen / camera / microphone — recording
+    // captures whichever remote tracks are live, so no single scope
+    // fits. Every other action checks its one scope, as before.
+    const grants =
+      scope === "any-media"
+        ? await db.query<DevicePermissionGrant>(
+            `select device_id, scope, is_revoked, revoked_at, expires_at
+             from public.device_permissions
+             where device_id = $1 and granted_to_user_id = $2
+               and scope in ('screen', 'camera', 'microphone') and is_revoked = false`,
+            [session.device_id, user.id],
+          )
+        : await db.query<DevicePermissionGrant>(
+            `select device_id, scope, is_revoked, revoked_at, expires_at
+             from public.device_permissions
+             where device_id = $1 and granted_to_user_id = $2 and scope = $3 and is_revoked = false`,
+            [session.device_id, user.id, scope],
+          );
     const valid = grants.rows.some((g) => isGrantValid(g, session.device_id));
     if (!valid) {
-      return jsonError(`The ${scope} permission is not granted to you for this device`, 403);
+      return jsonError(
+        scope === "any-media"
+          ? "No live screen, camera or microphone permission is granted to you for this device"
+          : `The ${scope} permission is not granted to you for this device`,
+        403,
+      );
     }
   }
 

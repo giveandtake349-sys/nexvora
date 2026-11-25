@@ -8,10 +8,12 @@ import { describe, it, expect } from "vitest";
 import {
   LOCATION_UPDATE_MIN_INTERVAL_MS,
   MAX_NOTIFICATION_FEED_ENTRIES,
+  AUDIT_ACTION_SCOPE,
   appendNotificationFeed,
   formatCoordinates,
   isLiveSessionAuditAction,
   openStreetMapLink,
+  shouldLogSecurityEvent,
   shouldSendLocationUpdate,
   validateDeviceNotification,
   validateLocationFix,
@@ -138,7 +140,7 @@ describe("remote-interaction validation — in-page only", () => {
 });
 
 describe("session audit-event body validation", () => {
-  it("accepts the seven allowed actions", () => {
+  it("accepts the nine allowed actions (incl. recording start/stop)", () => {
     for (const action of [
       "location.sharing_started",
       "location.sharing_stopped",
@@ -147,6 +149,8 @@ describe("session audit-event body validation", () => {
       "interaction.started",
       "interaction.stopped",
       "interaction.killed",
+      "recording.started",
+      "recording.stopped",
     ] as const) {
       expect(isLiveSessionAuditAction(action)).toBe(true);
       expect(validateSessionEventBody({ action })).toEqual({
@@ -155,6 +159,17 @@ describe("session audit-event body validation", () => {
         details: {},
       });
     }
+  });
+
+  it("recording.started is a security event; recording.stopped is session-only", () => {
+    expect(shouldLogSecurityEvent("recording.started")).toBe(true);
+    expect(shouldLogSecurityEvent("recording.stopped")).toBe(false);
+  });
+
+  it("recording actions are gated on any live media grant, not one scope", () => {
+    expect(AUDIT_ACTION_SCOPE["recording.started"]).toBe("any-media");
+    expect(AUDIT_ACTION_SCOPE["recording.stopped"]).toBe("any-media");
+    expect(AUDIT_ACTION_SCOPE["location.sharing_started"]).toBe("location");
   });
 
   it("rejects anything outside the allowlist, bad details, oversize details", () => {

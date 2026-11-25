@@ -15,6 +15,7 @@ const NAV = [
   { href: "/dashboard/trusted-devices", label: "Trusted Devices" },
   { href: "/dashboard/security", label: "Security Center" },
   { href: "/dashboard/history", label: "Session History" },
+  { href: "/dashboard/recordings", label: "Recordings" },
   { href: "/dashboard/settings", label: "Settings" },
 ];
 

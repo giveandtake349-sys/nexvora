@@ -246,6 +246,8 @@ export const LIVE_SESSION_AUDIT_ACTIONS = [
   "interaction.started",
   "interaction.stopped",
   "interaction.killed",
+  "recording.started",
+  "recording.stopped",
 ] as const;
 
 export type LiveSessionAuditAction = (typeof LIVE_SESSION_AUDIT_ACTIONS)[number];
@@ -299,15 +301,24 @@ export function shouldLogSecurityEvent(action: LiveSessionAuditAction): boolean 
   return (
     action.endsWith("_started") ||
     action === "interaction.started" ||
-    action === "interaction.killed"
+    action === "interaction.killed" ||
+    action === "recording.started"
   );
 }
 
 /**
  * Which permission scope gates each audit action (owner exempt, as
  * everywhere else). The events route enforces this server-side.
+ * "any-media" is special: the action is allowed when the caller
+ * holds a live grant for ANY of screen / camera / microphone —
+ * recording captures whichever remote tracks are live, so no single
+ * scope fits it (the route checks the three scopes for these
+ * actions).
  */
-export const AUDIT_ACTION_SCOPE: Record<LiveSessionAuditAction, "location" | "notifications" | "remote_interaction"> = {
+export const AUDIT_ACTION_SCOPE: Record<
+  LiveSessionAuditAction,
+  "location" | "notifications" | "remote_interaction" | "any-media"
+> = {
   "location.sharing_started": "location",
   "location.sharing_stopped": "location",
   "notifications.sharing_started": "notifications",
@@ -315,4 +326,6 @@ export const AUDIT_ACTION_SCOPE: Record<LiveSessionAuditAction, "location" | "no
   "interaction.started": "remote_interaction",
   "interaction.stopped": "remote_interaction",
   "interaction.killed": "remote_interaction",
+  "recording.started": "any-media",
+  "recording.stopped": "any-media",
 };

@@ -78,6 +78,29 @@
   session it gates local playback of the incoming audio, because that
   is the speaker control the web session actually has.
 
+## Session recording v1 (feature #1, Nov 25)
+
+- **Client-side only.** Recordings are saved in the viewer's browser
+  IndexedDB (`nexvora-recordings`) — nothing is uploaded to the
+  server and nothing is stored in Postgres. Clearing the browser's
+  site data deletes the recordings, and a recording made in another
+  browser never appears on the Recordings page.
+- **Owner consent is the gate.** A participant's recording starts
+  only after the device owner approves in-session; the owner can
+  revoke mid-recording and the recorder stops immediately. Both sides
+  see a REC indicator while recording is active. The recorder is the
+  viewer (controller) — it records the remote screen/camera +
+  microphone it receives.
+- **Limits:** one video track only (screen preferred, camera
+  fallback — MediaRecorder does not composite two video tracks);
+  1-hour auto-stop per recording; `.webm` with the best mime the
+  browser supports (vp9/opus → vp8/opus → vp9 → webm → default).
+- **Not live-verified:** the two-browser record → replay flow needs
+  real devices (the cloud browser cannot establish a peer
+  connection). Unit tests cover the consent machine, track/mime
+  picks, the IndexedDB store, and the audit validation — not a live
+  call.
+
 ## Browser limitations
 
 - **Screen sharing** (`getDisplayMedia`) can only be started by an explicit

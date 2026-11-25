@@ -220,6 +220,24 @@ describe("control-channel message validation", () => {
     ).toBeNull();
   });
 
+  it("accepts session-recording messages (request/approve/decline/start/stop/revoke/cancel)", () => {
+    for (const type of [
+      "recording-request",
+      "recording-approve",
+      "recording-decline",
+      "recording-started",
+      "recording-stopped",
+      "recording-revoke",
+      "recording-cancel",
+    ] as const) {
+      expect(parseControlMessage({ type })).toEqual({ type });
+    }
+    // Recording messages carry no payload — extra fields are ignored,
+    // and a mistyped recording message is dropped like any other.
+    expect(parseControlMessage({ type: "recording-start" })).toBeNull();
+    expect(parseControlMessage({ type: "recording-approved" })).toBeNull();
+  });
+
   it("the file channel is a separate, named channel from the control channel", () => {
     expect(FILE_CHANNEL_NAME).toBe("nexvora-file");
     expect(FILE_CHANNEL_NAME).not.toBe(CONTROL_CHANNEL_NAME);
