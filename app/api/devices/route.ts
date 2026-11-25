@@ -2,19 +2,18 @@ import { NextResponse, type NextRequest } from "next/server";
 import { jsonError, requireAuth, clientIp } from "@/lib/api";
 import { parseUserAgent, computeDeviceFingerprint } from "@/lib/device";
 import { logSecurityEvent } from "@/lib/audit";
+import type { Device } from "@/lib/types";
 
 /** GET /api/devices — list the signed-in user's own devices. */
 export async function GET() {
   const auth = await requireAuth();
   if ("response" in auth) return auth.response;
-  const { supabase, user } = auth.ctx;
-  const { data, error } = await supabase
-    .from("devices")
-    .select("*")
-    .eq("owner_id", user.id)
-    .order("created_at", { ascending: false });
-  if (error) return jsonError(error.message, 500);
-  return NextResponse.json({ devices: data ?? [] });
+  const { db, user } = auth.ctx;
+  const { rows } = await db.query<Device>(
+    `select * from public.devices where owner_id = $1 order by created_at desc`,
+    [user.id],
+  );
+  return NextResponse.json({ devices: rows });
 }
 
 /**
@@ -25,7 +24,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   const auth = await requireAuth();
   if ("response" in auth) return auth.response;
-  const { supabase, user } = auth.ctx;
+  const { db, user } = auth.ctx;
 
   const body = await request.json().catch(() => ({}));
   const name = typeof body.name === "string" ? body.name.trim().slice(0, 80) : "";
@@ -37,87 +36,81 @@ export async function POST(request: NextRequest) {
   );
 
   // Re-registering the same fingerprint updates last_seen_at (heartbeat).
-  const { data: existing } = await supabase
-    .from("devices")
-    .select("id")
-    .eq("owner_id", user.id)
-    .eq("device_fingerprint", fingerprint)
-    .maybeSingle();
+  const existing = await db.query<{ id: string }>(
+    `select id from public.devices where owner_id = $1 and device_fingerprint = $2 limit 1`,
+    [user.id, fingerprint],
+  );
+  const now = new Date().toISOString();
 
-  if (existing) {
-    const { data, error } = await supabase
-      .from("devices")
-      .update({ name, last_seen_at: new Date().toISOString() })
-      .eq("id", existing.id)
-      .eq("owner_id", user.id)
-      .select()
-      .single();
-    if (error) return jsonError(error.message, 500);
-    return NextResponse.json({ device: data });
+  if (existing.rows[0]) {
+    const { rows } = await db.query<Device>(
+      `update public.devices
+       set name = $1, last_seen_at = $2
+       where id = $3 and owner_id = $4
+       returning *`,
+      [name, now, existing.rows[0].id, user.id],
+    );
+    return NextResponse.json({ device: rows[0] });
   }
 
-  const { data, error } = await supabase
-    .from("devices")
-    .insert({
-      owner_id: user.id,
-      name,
-      device_fingerprint: fingerprint,
-      platform: ua.platform,
-      browser: ua.browser,
-      os: ua.os,
-      last_seen_at: new Date().toISOString(),
-      is_trusted: false,
-    })
-    .select()
-    .single();
-  if (error) return jsonError(error.message, 500);
-  await logSecurityEvent(supabase, {
+  const { rows } = await db.query<Device>(
+    `insert into public.devices
+       (owner_id, name, device_fingerprint, platform, browser, os, last_seen_at, is_trusted)
+     values ($1, $2, $3, $4, $5, $6, $7, false)
+     returning *`,
+    [user.id, name, fingerprint, ua.platform, ua.browser, ua.os, now],
+  );
+  const device = rows[0];
+  await logSecurityEvent(db, {
     user_id: user.id,
-    device_id: data.id,
+    device_id: device.id,
     actor_id: user.id,
     action: "device.registered",
     details: { name, platform: ua.platform },
     ip_address: clientIp(request),
     user_agent: request.headers.get("user-agent"),
   });
-  return NextResponse.json({ device: data }, { status: 201 });
+  return NextResponse.json({ device }, { status: 201 });
 }
 
 /**
  * DELETE /api/devices?id=<id> — owner-only removal. Removal revokes the
- * device's grants and ends its active sessions.
+ * device's grants and ends its active sessions (in one transaction).
  */
 export async function DELETE(request: NextRequest) {
   const auth = await requireAuth();
   if ("response" in auth) return auth.response;
-  const { supabase, user } = auth.ctx;
+  const { db, user } = auth.ctx;
   const id = request.nextUrl.searchParams.get("id");
   if (!id) return jsonError("Device id is required", 400);
 
-  const { data: device, error: fetchError } = await supabase
-    .from("devices")
-    .select("id")
-    .eq("id", id)
-    .eq("owner_id", user.id)
-    .maybeSingle();
-  if (fetchError) return jsonError(fetchError.message, 500);
-  if (!device) return jsonError("Device not found", 404);
+  const device = await db.query<{ id: string }>(
+    `select id from public.devices where id = $1 and owner_id = $2 limit 1`,
+    [id, user.id],
+  );
+  if (!device.rows[0]) return jsonError("Device not found", 404);
 
-  // Revoke grants + end sessions first, then delete the device row.
-  await supabase
-    .from("device_permissions")
-    .update({ is_revoked: true, revoked_at: new Date().toISOString(), revoked_by: user.id })
-    .eq("device_id", id)
-    .eq("is_revoked", false);
-  await supabase
-    .from("remote_sessions")
-    .update({ status: "ended", ended_at: new Date().toISOString() })
-    .eq("device_id", id)
-    .eq("status", "active");
-  const { error } = await supabase.from("devices").delete().eq("id", id).eq("owner_id", user.id);
-  if (error) return jsonError(error.message, 500);
+  const now = new Date().toISOString();
+  await db.tx(async (tx) => {
+    await tx.query(
+      `update public.device_permissions
+       set is_revoked = true, revoked_at = $1, revoked_by = $2
+       where device_id = $3 and is_revoked = false`,
+      [now, user.id, id],
+    );
+    await tx.query(
+      `update public.remote_sessions
+       set status = 'ended', ended_at = $1
+       where device_id = $2 and status = 'active'`,
+      [now, id],
+    );
+    await tx.query(
+      `delete from public.devices where id = $1 and owner_id = $2`,
+      [id, user.id],
+    );
+  });
 
-  await logSecurityEvent(supabase, {
+  await logSecurityEvent(db, {
     user_id: user.id,
     device_id: id,
     actor_id: user.id,

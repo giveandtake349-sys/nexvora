@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
+import { authClient } from "@/lib/auth/client";
 import { PERMISSION_SCOPES, SCOPE_LABELS, type PermissionScope } from "@/lib/permissions";
 import { Button, Input, Label } from "./ui";
 
@@ -369,6 +370,11 @@ export function UpdateProfileForm({ currentName }: { currentName: string }) {
     s.setBusy(true);
     s.setError(null);
     try {
+      // The auth user record is the source of truth for the display name
+      // shown across the dashboard (getSessionUser reads it), so update
+      // it first; the profile row is then synced by the PATCH below.
+      const { error: authError } = await authClient.updateUser({ name });
+      if (authError) throw new Error(authError.message ?? "Could not update your name");
       const res = await fetch("/api/profile", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },

@@ -1,9 +1,15 @@
 import type { PermissionScope } from "./permissions";
 
-/** Row shapes for the Supabase tables created in supabase/migrations/. */
+/**
+ * Row shapes for the Neon Postgres tables created in db/migrations/.
+ *
+ * User ids are Better Auth ids — opaque strings, NOT uuids — so every
+ * user-id column is text. Device / session / request ids are uuids.
+ */
 
 export interface Profile {
   id: string;
+  email: string | null;
   display_name: string | null;
   avatar_url: string | null;
   created_at: string;

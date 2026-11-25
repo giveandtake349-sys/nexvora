@@ -7,8 +7,9 @@
   "Live in Milestone 3" badge. A NEXVORA permission grant alone never turns
   on a camera or microphone.
 - **No file transfer, location sharing, or remote interaction.** Milestone 4.
-  The `file_transfers` table, RLS policies and the private Storage bucket
-  exist already; the transfer flow does not.
+  The `file_transfers` table and RLS policies exist already; the transfer
+  flow and its storage (deferred to Milestone 4 — no Storage bucket exists
+  yet in the Neon setup) do not.
 - **No WebRTC signaling / live session media.** Milestone 2.
 - **No native Android app.** Milestone 6. The schema carries a `platform`
   field (`web` | `android` | `ios` | `desktop`) so Android trusted-device
@@ -45,11 +46,14 @@
 
 ## Honest-state rules enforced in this codebase
 
-- The app builds and renders with no Supabase project configured, and every
+- The app builds and renders with no Neon project configured, and every
   auth/data surface says so instead of faking a login.
 - No page ever shows an "active" remote-access state unless a real
   connection exists.
-- No mock data is used as production functionality. `supabase/seed.sql` is
+- No mock data is used as production functionality. `db/seed.sql` is
   clearly marked demo-only and must not be run on production.
-- The service-role key is server-only (`SUPABASE_SERVICE_ROLE_KEY`, never
-  `NEXT_PUBLIC_`, never committed, never in client code).
+- There is no privileged service key in this setup. The database connection
+  string and the Neon Auth cookie secret are server-only (never
+  `NEXT_PUBLIC_`, never committed, never in client code, never pasted
+  into chat). Row Level Security is forced on every table, so even the
+  table-owner connection cannot bypass the per-user policies.

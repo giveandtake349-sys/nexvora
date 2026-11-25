@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
-import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { authClient } from "@/lib/auth/client";
 import { Button, Wordmark } from "./ui";
 
 const NAV = [
@@ -29,8 +29,7 @@ export default function DashboardShell({
   const router = useRouter();
 
   async function signOut() {
-    const supabase = createBrowserSupabaseClient();
-    if (supabase) await supabase.auth.signOut();
+    await authClient.signOut();
     router.push("/login");
     router.refresh();
   }

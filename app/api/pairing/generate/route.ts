@@ -13,11 +13,11 @@ import { logSecurityEvent } from "@/lib/audit";
 export async function POST(request: NextRequest) {
   const auth = await requireAuth();
   if ("response" in auth) return auth.response;
-  const { supabase, user } = auth.ctx;
+  const { db, user } = auth.ctx;
 
   const limit = checkRateLimit(`pairing:generate:${user.id}`, PAIRING_MAX_ATTEMPTS, PAIRING_ATTEMPT_WINDOW_MS);
   if (!limit.allowed) {
-    await logSecurityEvent(supabase, {
+    await logSecurityEvent(db, {
       user_id: user.id,
       actor_id: user.id,
       action: "pairing.rate_limited",
@@ -31,42 +31,34 @@ export async function POST(request: NextRequest) {
   const deviceId = typeof body.deviceId === "string" ? body.deviceId : null;
 
   if (deviceId) {
-    const { data: device } = await supabase
-      .from("devices")
-      .select("id")
-      .eq("id", deviceId)
-      .eq("owner_id", user.id)
-      .maybeSingle();
-    if (!device) return jsonError("Device not found", 404);
+    const device = await db.query<{ id: string }>(
+      `select id from public.devices where id = $1 and owner_id = $2 limit 1`,
+      [deviceId, user.id],
+    );
+    if (!device.rows[0]) return jsonError("Device not found", 404);
   }
 
   const { code, codeHash, secretHash, expiresAt } = generatePairingCode();
-  const { data, error } = await supabase
-    .from("pairing_invitations")
-    .insert({
-      inviter_user_id: user.id,
-      inviter_device_id: deviceId,
-      code_hash: codeHash,
-      secret_hash: secretHash,
-      display_code_hint: code.slice(-2),
-      expires_at: expiresAt.toISOString(),
-      status: "active",
-    })
-    .select("id")
-    .single();
-  if (error) return jsonError(error.message, 500);
+  const { rows } = await db.query<{ id: string }>(
+    `insert into public.pairing_invitations
+       (inviter_user_id, inviter_device_id, code_hash, secret_hash, display_code_hint, expires_at, status)
+     values ($1, $2, $3, $4, $5, $6, 'active')
+     returning id`,
+    [user.id, deviceId, codeHash, secretHash, code.slice(-2), expiresAt.toISOString()],
+  );
+  const invitation = rows[0];
 
-  await logSecurityEvent(supabase, {
+  await logSecurityEvent(db, {
     user_id: user.id,
     device_id: deviceId,
     actor_id: user.id,
     action: "pairing.code_generated",
-    details: { invitation_id: data.id, expires_at: expiresAt.toISOString() },
+    details: { invitation_id: invitation.id, expires_at: expiresAt.toISOString() },
     ip_address: clientIp(request),
     user_agent: request.headers.get("user-agent"),
   });
   return NextResponse.json(
-    { invitationId: data.id, code, expiresAt: expiresAt.toISOString() },
+    { invitationId: invitation.id, code, expiresAt: expiresAt.toISOString() },
     { status: 201 },
   );
 }

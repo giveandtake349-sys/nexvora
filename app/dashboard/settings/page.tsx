@@ -17,12 +17,12 @@ export default async function SettingsPage() {
             <p className="mt-1 mb-4 text-sm text-[#8FA3A0]">
               Signed in as <span className="text-[#E8F0EE]">{data.user.email}</span>
             </p>
-            <UpdateProfileForm currentName={data.user.user_metadata?.display_name ?? ""} />
+            <UpdateProfileForm currentName={data.user.displayName ?? ""} />
           </Card>
           <Card>
             <h2 className="font-semibold text-white">Account</h2>
             <p className="mt-2 text-sm text-[#8FA3A0]">
-              Email verification and password changes go through Supabase Auth. Use “Forgot password” on the
+              Email verification and password changes go through Neon Auth. Use “Forgot password” on the
               sign-in page to reset your password.
             </p>
             <p className="mt-2 text-xs text-[#8FA3A0]">

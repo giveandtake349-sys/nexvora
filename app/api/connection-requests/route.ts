@@ -1,22 +1,23 @@
-import { NextResponse } from "next/server";
-import { jsonError, requireAuth } from "@/lib/api";
+import { NextResponse, type NextRequest } from "next/server";
+import { requireAuth } from "@/lib/api";
+import type { ConnectionRequest } from "@/lib/types";
 
 /**
  * GET /api/connection-requests?role=owner|requester
  * Owner: requests targeting my devices. Requester: requests I made.
  * Both sides can see the request — only the owner can decide it.
  */
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
   const auth = await requireAuth();
   if ("response" in auth) return auth.response;
-  const { supabase, user } = auth.ctx;
-  const role = new URL(request.url).searchParams.get("role") ?? "owner";
+  const { db, user } = auth.ctx;
+  const role = request.nextUrl.searchParams.get("role") ?? "owner";
 
-  const query = supabase.from("connection_requests").select("*").order("created_at", { ascending: false });
-  const { data, error } =
-    role === "requester"
-      ? await query.eq("requester_user_id", user.id)
-      : await query.eq("owner_id", user.id);
-  if (error) return jsonError(error.message, 500);
-  return NextResponse.json({ requests: data ?? [] });
+  const column = role === "requester" ? "requester_user_id" : "owner_id";
+  const { rows } = await db.query<ConnectionRequest>(
+    `select * from public.connection_requests
+     where ${column} = $1 order by created_at desc`,
+    [user.id],
+  );
+  return NextResponse.json({ requests: rows });
 }

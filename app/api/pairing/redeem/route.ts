@@ -9,6 +9,7 @@ import {
 import { checkRateLimit } from "@/lib/rate-limit";
 import { isPermissionScope, type PermissionScope } from "@/lib/permissions";
 import { logSecurityEvent } from "@/lib/audit";
+import type { ConnectionRequest, PairingInvitation } from "@/lib/types";
 
 /**
  * POST /api/pairing/redeem — Device B enters a pairing code.
@@ -16,18 +17,20 @@ import { logSecurityEvent } from "@/lib/audit";
  *
  * Server-side only: looks the invitation up by SHA-256(code), checks
  * expiry + single-use, marks it used FIRST (replay prevention), then
- * creates a PENDING connection request. The code alone grants nothing —
- * the device owner must still approve the request.
+ * creates a PENDING connection request — inside ONE transaction, so
+ * the mark-used update and the request insert succeed or fail
+ * together. The code alone grants nothing — the device owner must
+ * still approve the request.
  * Rate-limited: 5 attempts per user per 10 minutes.
  */
 export async function POST(request: NextRequest) {
   const auth = await requireAuth();
   if ("response" in auth) return auth.response;
-  const { supabase, user } = auth.ctx;
+  const { db, user } = auth.ctx;
 
   const limit = checkRateLimit(`pairing:redeem:${user.id}`, PAIRING_MAX_ATTEMPTS, PAIRING_ATTEMPT_WINDOW_MS);
   if (!limit.allowed) {
-    await logSecurityEvent(supabase, {
+    await logSecurityEvent(db, {
       user_id: user.id,
       actor_id: user.id,
       action: "pairing.rate_limited",
@@ -46,17 +49,16 @@ export async function POST(request: NextRequest) {
     : [];
   if (scopes.length === 0) return jsonError("Select at least one permission to request", 400);
 
-  const { data: invitation, error } = await supabase
-    .from("pairing_invitations")
-    .select("*")
-    .eq("code_hash", hashPairingValue(code))
-    .eq("status", "active")
-    .maybeSingle();
-  if (error) return jsonError(error.message, 500);
+  const invitationRes = await db.query<PairingInvitation>(
+    `select * from public.pairing_invitations
+     where code_hash = $1 and status = 'active' limit 1`,
+    [hashPairingValue(code)],
+  );
+  const invitation = invitationRes.rows[0] ?? null;
 
   const usability = checkPairingUsability(invitation);
   if (usability !== "usable" || !invitation) {
-    await logSecurityEvent(supabase, {
+    await logSecurityEvent(db, {
       user_id: user.id,
       actor_id: user.id,
       action: "pairing.failed",
@@ -73,46 +75,69 @@ export async function POST(request: NextRequest) {
   }
 
   // Mark used BEFORE creating the request — a second redeem of the same
-  // code must fail even if two requests arrive at once.
-  const { error: usedError } = await supabase
-    .from("pairing_invitations")
-    .update({ used_at: new Date().toISOString(), status: "used" })
-    .eq("id", invitation.id)
-    .is("used_at", null);
-  if (usedError) return jsonError(usedError.message, 500);
+  // code must fail even if two requests arrive at once. The whole
+  // mark-used + target lookup + request insert runs in one transaction.
+  let connectionRequest: ConnectionRequest;
+  try {
+    connectionRequest = await db.tx(async (tx) => {
+      const marked = await tx.query(
+        `update public.pairing_invitations
+         set used_at = $1, status = 'used'
+         where id = $2 and used_at is null`,
+        [new Date().toISOString(), invitation.id],
+      );
+      if (marked.rowCount !== 1) throw new Error("ALREADY_USED");
 
-  // The target device is the inviter's device (or the inviter's account
-  // if no device was attached to the invitation).
-  const targetDeviceId: string | null = invitation.inviter_device_id;
-  if (!targetDeviceId) return jsonError("This pairing code has no target device.", 400);
+      // The target device is the inviter's device (or the inviter's
+      // account if no device was attached to the invitation).
+      const targetDeviceId: string | null = invitation.inviter_device_id;
+      if (!targetDeviceId) throw new Error("NO_TARGET_DEVICE");
+      const target = await tx.query<{ id: string; owner_id: string }>(
+        `select id, owner_id from public.devices where id = $1 limit 1`,
+        [targetDeviceId],
+      );
+      const targetDevice = target.rows[0] ?? null;
+      if (!targetDevice) throw new Error("TARGET_GONE");
+      if (targetDevice.owner_id === user.id) throw new Error("OWN_DEVICE");
 
-  const { data: targetDevice } = await supabase
-    .from("devices")
-    .select("id, owner_id")
-    .eq("id", targetDeviceId)
-    .maybeSingle();
-  if (!targetDevice) return jsonError("Target device no longer exists.", 404);
-  if (targetDevice.owner_id === user.id) {
-    return jsonError("You cannot pair with your own device this way — use My Devices instead.", 400);
+      const deviceId = typeof body.deviceId === "string" ? body.deviceId : null;
+      const inserted = await tx.query<ConnectionRequest>(
+        `insert into public.connection_requests
+           (requester_user_id, requester_device_id, target_device_id, owner_id, requested_scopes, status)
+         values ($1, $2, $3, $4, $5, 'pending')
+         returning *`,
+        [user.id, deviceId, targetDeviceId, targetDevice.owner_id, scopes],
+      );
+      const created = inserted.rows[0];
+      if (!created) throw new Error("INSERT_FAILED");
+      return created;
+    });
+  } catch (error) {
+    const code_ = error instanceof Error ? error.message : "";
+    if (code_ === "ALREADY_USED") {
+      return jsonError("This pairing code has already been used.", 400);
+    }
+    if (code_ === "NO_TARGET_DEVICE") {
+      return jsonError("This pairing code has no target device.", 400);
+    }
+    if (code_ === "TARGET_GONE") {
+      return jsonError("Target device no longer exists.", 404);
+    }
+    if (code_ === "OWN_DEVICE") {
+      return jsonError("You cannot pair with your own device this way — use My Devices instead.", 400);
+    }
+    console.error("[pairing] redeem transaction failed:", error);
+    return jsonError("Could not redeem this pairing code.", 500);
   }
 
-  const deviceId = typeof body.deviceId === "string" ? body.deviceId : null;
-  const { data: connectionRequest, error: reqError } = await supabase
-    .from("connection_requests")
-    .insert({
-      requester_user_id: user.id,
-      requester_device_id: deviceId,
-      target_device_id: targetDeviceId,
-      owner_id: targetDevice.owner_id,
-      requested_scopes: scopes,
-      status: "pending",
-    })
-    .select()
-    .single();
-  if (reqError) return jsonError(reqError.message, 500);
-
-  await logSecurityEvent(supabase, {
-    user_id: targetDevice.owner_id,
+  // Re-read the owner/target for the audit row (the tx already validated them).
+  const targetDeviceId = invitation.inviter_device_id as string;
+  const ownerRes = await db.query<{ owner_id: string }>(
+    `select owner_id from public.devices where id = $1 limit 1`,
+    [targetDeviceId],
+  );
+  await logSecurityEvent(db, {
+    user_id: ownerRes.rows[0]?.owner_id ?? null,
     device_id: targetDeviceId,
     actor_id: user.id,
     action: "pairing.redeemed",

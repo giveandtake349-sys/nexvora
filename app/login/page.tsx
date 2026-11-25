@@ -2,8 +2,10 @@ import Link from "next/link";
 import { Suspense } from "react";
 import AuthLayout from "@/components/AuthLayout";
 import { LoginForm } from "@/components/AuthForms";
+import { isAuthConfigured } from "@/lib/db/config";
 
 export default function LoginPage() {
+  const configured = isAuthConfigured();
   return (
     <AuthLayout
       title="Sign in to NEXVORA"
@@ -22,7 +24,7 @@ export default function LoginPage() {
       }
     >
       <Suspense>
-        <LoginForm />
+        <LoginForm configured={configured} />
       </Suspense>
     </AuthLayout>
   );

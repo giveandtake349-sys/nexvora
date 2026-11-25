@@ -98,7 +98,7 @@ export default async function SecurityPage() {
           <Card>
             <h2 className="font-semibold text-white">Login history</h2>
             <p className="mt-3 text-sm text-[#8FA3A0]">
-              Login history is recorded from Supabase Auth events in Milestone 1 via the security audit log
+              Login history is recorded from Neon Auth events in Milestone 1 via the security audit log
               (sign-ins that go through this app write a <span className="font-mono">session.started</span> event
               when a connection is approved). A dedicated auth-event table is a Milestone 2 hardening item —
               no login rows are invented here.

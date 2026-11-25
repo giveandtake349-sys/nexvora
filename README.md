@@ -12,14 +12,14 @@ database, device registration, secure pairing, approval and revocation.
 ## Stack
 
 - Next.js 16 (App Router) + TypeScript (strict) + Tailwind CSS v4
-- Supabase Auth (email/password + Google OAuth + email verification + password recovery)
-- Supabase PostgreSQL + Row Level Security (RLS)
-- Supabase Storage (bucket + policies only in Milestone 1)
+- Neon Postgres + Managed Better Auth (Neon Auth) for sign-in
+  (email/password + Google OAuth + email verification + password recovery)
+- Raw SQL over the Neon serverless Pool + Row Level Security (RLS, forced)
 - Vitest for unit tests
 
-## Quick start (no Supabase yet)
+## Quick start (no Neon yet)
 
-The app builds and runs without a Supabase project. Auth and device data are
+The app builds and runs without a Neon project. Auth and device data are
 disabled in that state and every page says so clearly — nothing is faked.
 
 ```bash
@@ -31,12 +31,28 @@ npm test           # vitest run
 
 ## Full setup (real auth + database)
 
-### 1. Create a Supabase project
+### 1. Create a Neon project
 
-1. Go to https://supabase.com/dashboard → New project.
-2. Note the project URL and anon key (Settings → API).
+1. Go to https://console.neon.tech → New project (any region; Singapore
+   `ap-southeast-1` is the current project).
+2. Note the **pooled** connection string (`DATABASE_URL`) and the **direct**
+   connection string (`DATABASE_URL_UNPOOLED`) from the project dashboard →
+   Connection Details. The direct string is used for migrations.
 
-### 2. Environment variables
+### 2. Enable Managed Better Auth
+
+1. In the Neon Console, open the project → **Auth** page → enable
+   **Managed Better Auth** (this is the current Neon Auth product; the
+   older Stack Auth-based Neon Auth is legacy and closed to new users).
+2. Copy the branch **Auth URL** — this is `NEON_AUTH_BASE_URL`.
+3. Generate a cookie secret of **at least 32 characters**
+   (e.g. `openssl rand -base64 48`) — this is `NEON_AUTH_COOKIE_SECRET`.
+   The app refuses to start auth with a shorter secret.
+4. In the Auth settings, enable the **Google** social provider and add your
+   Google OAuth client ID/secret (Google Cloud Console), and set the app's
+   callback URL to `<your-app-url>/api/auth/callback/google`.
+
+### 3. Environment variables
 
 ```bash
 cp .env.example .env.local
@@ -45,41 +61,26 @@ cp .env.example .env.local
 Fill in:
 
 ```
-NEXT_PUBLIC_SUPABASE_URL=https://<your-project>.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key>
-SUPABASE_SERVICE_ROLE_KEY=<service-role key>   # server-only, never NEXT_PUBLIC_, never commit
+DATABASE_URL=postgresql://<user>:<password>@<pooled-host>/<db>?sslmode=require
+DATABASE_URL_UNPOOLED=postgresql://<user>:<password>@<direct-host>/<db>?sslmode=require
+NEON_AUTH_BASE_URL=https://<your-branch-auth-url>.neon.tech
+NEON_AUTH_COOKIE_SECRET=<at least 32 characters>
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 
-### 3. Run the database migrations
+All of these are server-only except `NEXT_PUBLIC_APP_URL`. Never commit
+`.env.local`, never paste real values into chat.
 
-In the Supabase dashboard → SQL Editor, run in order:
+### 4. Run the database migration
 
-1. `supabase/migrations/0001_init.sql` — all 10 tables, indexes, RLS policies,
-   profile auto-creation trigger.
-2. `supabase/migrations/0002_storage.sql` — private `file-transfers` bucket + policies.
+In the Neon dashboard → SQL Editor (or with `psql` against
+`DATABASE_URL_UNPOOLED`), run:
 
-Or with the Supabase CLI (if installed):
+1. `db/migrations/0001_init.sql` — all 10 tables, indexes, forced RLS
+   policies, `current_app_user_id()` helper. Profile rows are created by
+   the app on first sign-in (lazy upsert) — there is no auth trigger.
 
-```bash
-supabase link --project-ref <your-project-ref>
-supabase db push
-```
-
-`supabase/seed.sql` is **demo data only** — do not run it against production.
-
-### 4. Enable Google OAuth
-
-1. Supabase dashboard → Authentication → Providers → Google → enable.
-2. Create OAuth credentials in Google Cloud Console and paste the client ID/secret
-   into Supabase.
-3. Supabase → Authentication → URL Configuration:
-   - Site URL: `http://localhost:3000` (local) / your Vercel URL (production)
-   - Redirect URLs: add `http://localhost:3000/auth/callback` (and the production
-     equivalent). The app uses `/auth/callback?next=/dashboard`.
-
-Email verification and password recovery use Supabase's built-in email templates;
-confirm the redirect URL above is allow-listed or the links will fail.
+`db/seed.sql` is **demo data only** — do not run it against production.
 
 ### 5. Run
 
@@ -99,6 +100,7 @@ approve/reject requests from a second account.
   approves a subset or rejects. Approved scopes become one
   `device_permissions` row each (owner, device, granted-to user, scope,
   granted_at, expires_at = 30 days by default, revocation status).
+  Approval writes grants + session + status flip in one transaction.
 - **Reuse:** on reconnect the server re-checks the grant — valid grants are
   reused without re-approval. Re-approval is only needed for a new scope, a
   changed device identity, an expiry, a revocation, or a security event.
@@ -111,10 +113,27 @@ approve/reject requests from a second account.
   microphone or screen share. Those need explicit browser/OS consent at use
   time (Milestone 3). See `docs/limitations.md`.
 
+## How auth + RLS work here
+
+- Auth is **Managed Better Auth (Neon Auth)**, package `@neon/auth`
+  (`^0.8.2`). Sign-in lives at `/api/auth/[...path]` (same-origin proxy);
+  the browser client (`lib/auth/client.ts`) never sees a key.
+- User ids are Better Auth ids — opaque **text** strings, not uuids. Every
+  user-id column in the schema is `text`; device / session / request ids
+  stay `uuid`.
+- Every database query runs inside a transaction that first sets
+  `app.current_user_id` to the validated session user id
+  (`lib/db/client.ts` `withUser()`). The migration's
+  `public.current_app_user_id()` reads that variable, and every RLS policy
+  is written against it. Unset → NULL → every policy denies (fail-closed).
+- All 10 tables carry **FORCE ROW LEVEL SECURITY**: the app connects as the
+  table owner, which Postgres would otherwise exempt from RLS.
+
 ## Project structure
 
 ```
 app/                  Routes: landing, auth pages, dashboard pages, /api/*
+  api/auth/           Managed Better Auth handler (sign-up, sign-in, Google, reset)
   api/devices/        Register / list / remove devices
   api/pairing/        generate + redeem pairing codes
   api/connection-requests/   list, approve (with scope checklist), reject
@@ -122,10 +141,12 @@ app/                  Routes: landing, auth pages, dashboard pages, /api/*
   api/sessions/       disconnect one, disconnect all
   api/profile/        update display name
 components/           ui.tsx (brand system), DashboardShell, AuthForms, DashboardActions
-lib/                  Supabase clients, permissions, pairing, rate-limit,
-                      device helpers, audit logging, API auth helper
+lib/                  db/ (Neon pool + config), auth/ (Neon Auth server/client/session),
+                      permissions, pairing, rate-limit, device helpers,
+                      audit logging, API auth helper
   __tests__/          Vitest unit tests
-supabase/migrations/  0001_init.sql (10 tables + RLS), 0002_storage.sql
+db/migrations/        0001_init.sql (10 tables + forced RLS)
+db/seed.sql           Demo data only — never run on production
 docs/limitations.md   Browser limits + Android future work
 ```
 
@@ -141,7 +162,8 @@ docs/limitations.md   Browser limits + Android future work
 
 ## Deploy on Vercel
 
-Set the same four env vars in the Vercel project settings, set
+Set the same five env vars in the Vercel project settings, set
 `NEXT_PUBLIC_APP_URL` to the deployed URL, and add the production
-`/auth/callback` URL to Supabase's redirect allow-list (step 4 above).
-Do not deploy unverified code — run `npm run build` and `npm test` first.
+`/api/auth/callback/google` URL to the Neon Auth Google provider settings
+(step 2 above). Do not deploy unverified code — run `npm run build` and
+`npm test` first.

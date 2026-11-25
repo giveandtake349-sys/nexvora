@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
-import { SUPABASE_NOT_CONFIGURED_MESSAGE } from "@/lib/supabase/config";
+import { NEON_AUTH_NOT_CONFIGURED_MESSAGE } from "@/lib/db/config";
 import { SCOPE_LABELS, type PermissionScope } from "@/lib/permissions";
 
 /** Geometric Tech Symbol — the NEXVORA logo (inline SVG, no stock image). */
@@ -97,12 +97,12 @@ export function EmptyState({ title, body }: { title: string; body: string }) {
   );
 }
 
-/** Shown on every auth/data surface when no Supabase project is configured. */
+/** Shown on every auth/data surface when Neon Auth is not configured. */
 export function ConfigNotice() {
   return (
     <div className="rounded-xl border border-[#D4AF37]/40 bg-[#D4AF37]/10 p-4 text-sm text-[#E8F0EE]">
-      <p className="font-semibold text-[#D4AF37]">Supabase not configured</p>
-      <p className="mt-1">{SUPABASE_NOT_CONFIGURED_MESSAGE}</p>
+      <p className="font-semibold text-[#D4AF37]">Neon Auth not configured</p>
+      <p className="mt-1">{NEON_AUTH_NOT_CONFIGURED_MESSAGE}</p>
     </div>
   );
 }

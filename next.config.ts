@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // No cacheComponents: dashboard pages read the Supabase session from
+  // No cacheComponents: dashboard pages read the Neon Auth session from
   // cookies and must stay dynamic.
   // The Turbopack CSS rule is required by @tailwindcss/turbopack (the
   // Tailwind v4 pipeline this scaffold uses) — without it, @theme and

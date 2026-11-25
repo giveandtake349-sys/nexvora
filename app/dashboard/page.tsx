@@ -13,7 +13,7 @@ export default async function DashboardPage() {
         <PageHeader title="Overview" subtitle="Your devices, requests and sessions at a glance." />
         <ConfigNotice />
         <p className="mt-4 text-sm text-[#8FA3A0]">
-          Once Supabase is configured, this page shows your real devices, pending connection requests,
+          Once Neon is configured, this page shows your real devices, pending connection requests,
           active sessions and recent security events. Follow the setup steps in README.md.
         </p>
       </div>
@@ -40,7 +40,7 @@ export default async function DashboardPage() {
 
   return (
     <div>
-      <PageHeader title="Overview" subtitle={`Welcome back, ${data.user.user_metadata?.display_name ?? data.user.email}.`} />
+      <PageHeader title="Overview" subtitle={`Welcome back, ${data.user.displayName ?? data.user.email}.`} />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
           <p className="text-xs tracking-wide text-[#8FA3A0] uppercase">My devices</p>

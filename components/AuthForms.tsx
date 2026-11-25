@@ -2,8 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createBrowserSupabaseClient } from "@/lib/supabase/client";
-import { isSupabaseConfigured } from "@/lib/supabase/config";
+import { authClient } from "@/lib/auth/client";
 import { Button, ConfigNotice, Input, Label } from "./ui";
 
 function useAuthState() {
@@ -15,27 +14,25 @@ function useAuthState() {
   return { router, searchParams, error, setError, message, setMessage, busy, setBusy };
 }
 
-function GoogleButton({ label }: { label: string }) {
+function GoogleButton({ label, configured }: { label: string; configured: boolean }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   async function signInWithGoogle() {
-    const supabase = createBrowserSupabaseClient();
-    if (!supabase) return;
     setBusy(true);
     setError(null);
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? window.location.origin;
-    const { error } = await supabase.auth.signInWithOAuth({
+    const { error } = await authClient.signIn.social({
       provider: "google",
-      options: { redirectTo: `${appUrl}/auth/callback?next=/dashboard` },
+      callbackURL: "/dashboard",
     });
     if (error) {
-      setError(error.message);
+      setError(error.message ?? "Google sign-in failed");
       setBusy(false);
     }
+    // On success the client redirects the browser to Google.
   }
   return (
     <div>
-      <Button variant="outline" className="w-full" onClick={signInWithGoogle} disabled={!isSupabaseConfigured() || busy}>
+      <Button variant="outline" className="w-full" onClick={signInWithGoogle} disabled={!configured || busy}>
         {busy ? "Redirecting to Google…" : label}
       </Button>
       {error && <p className="mt-2 text-sm text-red-300">{error}</p>}
@@ -43,21 +40,18 @@ function GoogleButton({ label }: { label: string }) {
   );
 }
 
-export function LoginForm() {
+export function LoginForm({ configured }: { configured: boolean }) {
   const s = useAuthState();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const configured = isSupabaseConfigured();
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    const supabase = createBrowserSupabaseClient();
-    if (!supabase) return;
     s.setBusy(true);
     s.setError(null);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await authClient.signIn.email({ email, password });
     if (error) {
-      s.setError(error.message);
+      s.setError(error.message ?? "Sign-in failed");
       s.setBusy(false);
       return;
     }
@@ -68,7 +62,7 @@ export function LoginForm() {
   if (!configured) return <ConfigNotice />;
   return (
     <form onSubmit={onSubmit} className="space-y-4">
-      <GoogleButton label="Continue with Google" />
+      <GoogleButton label="Continue with Google" configured={configured} />
       <div className="text-center text-xs text-[#8FA3A0]">or sign in with email</div>
       <div>
         <Label>Email</Label>
@@ -86,31 +80,29 @@ export function LoginForm() {
   );
 }
 
-export function RegisterForm() {
+export function RegisterForm({ configured }: { configured: boolean }) {
   const s = useAuthState();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const configured = isSupabaseConfigured();
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    const supabase = createBrowserSupabaseClient();
-    if (!supabase) return;
     s.setBusy(true);
     s.setError(null);
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? window.location.origin;
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: { display_name: name },
-        emailRedirectTo: `${appUrl}/auth/callback?next=/dashboard`,
-      },
-    });
+    const { error } = await authClient.signUp.email({ email, password, name });
     if (error) {
-      s.setError(error.message);
+      s.setError(error.message ?? "Registration failed");
       s.setBusy(false);
+      return;
+    }
+    // If the Neon Auth project does not require email verification the
+    // user is signed in immediately — go straight to the dashboard.
+    // Otherwise they must verify first; tell them to check their inbox.
+    const { data: session } = await authClient.getSession();
+    if (session?.session) {
+      s.router.push("/dashboard");
+      s.router.refresh();
       return;
     }
     s.setMessage("Account created. Check your email to verify your address, then sign in.");
@@ -120,7 +112,7 @@ export function RegisterForm() {
   if (!configured) return <ConfigNotice />;
   return (
     <form onSubmit={onSubmit} className="space-y-4">
-      <GoogleButton label="Continue with Google" />
+      <GoogleButton label="Continue with Google" configured={configured} />
       <div className="text-center text-xs text-[#8FA3A0]">or register with email</div>
       <div>
         <Label>Display name</Label>
@@ -143,23 +135,22 @@ export function RegisterForm() {
   );
 }
 
-export function ForgotPasswordForm() {
+export function ForgotPasswordForm({ configured }: { configured: boolean }) {
   const s = useAuthState();
   const [email, setEmail] = useState("");
-  const configured = isSupabaseConfigured();
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    const supabase = createBrowserSupabaseClient();
-    if (!supabase) return;
     s.setBusy(true);
     s.setError(null);
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? window.location.origin;
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${appUrl}/auth/callback?next=/reset-password`,
+    // better-auth 1.7 renamed the reset request: /forget-password was
+    // removed in favour of /request-password-reset.
+    const { error } = await authClient.requestPasswordReset({
+      email,
+      redirectTo: "/reset-password",
     });
     if (error) {
-      s.setError(error.message);
+      s.setError(error.message ?? "Could not send the reset link");
       s.setBusy(false);
       return;
     }
@@ -183,20 +174,22 @@ export function ForgotPasswordForm() {
   );
 }
 
-export function ResetPasswordForm() {
+export function ResetPasswordForm({ configured }: { configured: boolean }) {
   const s = useAuthState();
   const [password, setPassword] = useState("");
-  const configured = isSupabaseConfigured();
+  const token = s.searchParams.get("token");
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    const supabase = createBrowserSupabaseClient();
-    if (!supabase) return;
+    if (!token) {
+      s.setError("This reset link is invalid or expired. Request a new one from the forgot-password page.");
+      return;
+    }
     s.setBusy(true);
     s.setError(null);
-    const { error } = await supabase.auth.updateUser({ password });
+    const { error } = await authClient.resetPassword({ newPassword: password, token });
     if (error) {
-      s.setError(error.message);
+      s.setError(error.message ?? "Could not update the password");
       s.setBusy(false);
       return;
     }

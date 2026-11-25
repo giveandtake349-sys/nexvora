@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Badge, Button, Card, Wordmark } from "@/components/ui";
 import { PERMISSION_SCOPES, SCOPE_LABELS } from "@/lib/permissions";
-import { isSupabaseConfigured } from "@/lib/supabase/config";
+import { isAuthConfigured, isDatabaseConfigured } from "@/lib/db/config";
 
 const FEATURES = [
   {
@@ -31,7 +31,7 @@ const FEATURES = [
 ];
 
 export default function Home() {
-  const configured = isSupabaseConfigured();
+  const configured = isDatabaseConfigured() && isAuthConfigured();
   return (
     <div className="min-h-screen bg-[#080D12]">
       <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
@@ -69,7 +69,7 @@ export default function Home() {
           </div>
           {!configured && (
             <p className="mx-auto mt-6 max-w-xl rounded-xl border border-[#D4AF37]/40 bg-[#D4AF37]/10 px-4 py-3 text-sm text-[#E8F0EE]">
-              Demo mode: no Supabase project is configured yet, so sign-in and
+              Demo mode: no Neon project is configured yet, so sign-in and
               device data are disabled. Set the env vars in{" "}
               <code className="font-mono">.env.local</code> to enable them — see
               README.md.

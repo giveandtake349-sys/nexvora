@@ -2,8 +2,10 @@ import Link from "next/link";
 import { Suspense } from "react";
 import AuthLayout from "@/components/AuthLayout";
 import { ForgotPasswordForm } from "@/components/AuthForms";
+import { isAuthConfigured } from "@/lib/db/config";
 
 export default function ForgotPasswordPage() {
+  const configured = isAuthConfigured();
   return (
     <AuthLayout
       title="Reset your password"
@@ -18,7 +20,7 @@ export default function ForgotPasswordPage() {
       }
     >
       <Suspense>
-        <ForgotPasswordForm />
+        <ForgotPasswordForm configured={configured} />
       </Suspense>
     </AuthLayout>
   );

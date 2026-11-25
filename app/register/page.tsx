@@ -2,8 +2,10 @@ import Link from "next/link";
 import { Suspense } from "react";
 import AuthLayout from "@/components/AuthLayout";
 import { RegisterForm } from "@/components/AuthForms";
+import { isAuthConfigured } from "@/lib/db/config";
 
 export default function RegisterPage() {
+  const configured = isAuthConfigured();
   return (
     <AuthLayout
       title="Create your NEXVORA account"
@@ -18,7 +20,7 @@ export default function RegisterPage() {
       }
     >
       <Suspense>
-        <RegisterForm />
+        <RegisterForm configured={configured} />
       </Suspense>
     </AuthLayout>
   );

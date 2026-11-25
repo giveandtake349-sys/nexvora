@@ -192,3 +192,31 @@ Template: `.env.example`. No real secret exists anywhere in the code.
    `NEXT_PUBLIC_APP_URL` to the deployed URL.
 7. Milestone 2: remote session architecture, permission management runtime,
    WebRTC signaling, session lifecycle.
+
+---
+
+## Addendum — Neon adaptation (Nov 25, 2026)
+
+The Supabase implementation described above has been adapted to **Neon
+Postgres + Managed Better Auth (Neon Auth)**. The Supabase code is gone
+from the app; this report is kept as the historical record of Milestone 1
+as first built. Full details, file list, verification results and
+remaining live-DB steps: `MILESTONE-1-NEON-REPORT.md`.
+
+Summary of the change: `@supabase/ssr` / `@supabase/supabase-js`
+removed; `@neon/auth@0.8.2` + `@neondatabase/serverless@1.2.1`
+installed. Auth is Managed Better Auth (the current Neon Auth product —
+the plan's recommended Stack Auth-based Neon Auth is legacy and closed
+to new users). Database access is raw SQL over the Neon Pool with
+`SET LOCAL app.current_user_id` per transaction; all 10 tables carry
+FORCE ROW LEVEL SECURITY. User ids are text (Better Auth ids), not uuids.
+`supabase/` moved to `db/`; the Storage bucket migration was deleted
+(storage is deferred to Milestone 4).
+
+Verified Nov 25, 2026: `npm run build` passes, `npm test` 30 passed /
+4 skipped (integration tests need a live test DB), `npm run lint` clean,
+production smoke test passes (/, /login, /dashboard 200; APIs 503 with
+the honest not-configured message). Live-DB verification is still
+pending: migration not applied to Neon, no two-account end-to-end test,
+no Vercel deploy yet — all need the Neon DATABASE_URL and the enabled
+Managed Better Auth project from the user.
