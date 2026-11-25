@@ -15,9 +15,11 @@ export const dynamic = "force-dynamic";
  * Milestone 3 remote-access workspace: permission shell + live sessions.
  * Live screen / camera / microphone / speaker run in a live session
  * (dedicated /dashboard/sessions/[id] page, WebRTC over the Milestone 2
- * signaling API). A card shows "Granted" only when a real, valid grant
- * exists, and a session shows as joinable only when it is really active
- * — never an active state without a real connection.
+ * signaling API), as do the Milestone 4 features (file transfer,
+ * location, remote interaction, notification feed). A card shows
+ * "Granted" only when a real, valid grant exists, and a session shows
+ * as joinable only when it is really active — never an active state
+ * without a real connection.
  */
 export default async function RemoteAccessPage() {
   const data = await getDashboardData();
@@ -26,7 +28,7 @@ export default async function RemoteAccessPage() {
     <div>
       <PageHeader
         title="Remote Access"
-        subtitle="One card per feature, each with its own permission and state. Live screen, camera, microphone and speaker run in live sessions (Milestone 3); file transfer, location and remote interaction arrive in Milestone 4."
+        subtitle="One card per feature, each with its own permission and state. Live screen, camera, microphone and speaker run in live sessions (Milestone 3); file transfer, location, remote interaction and the notification feed run in the same live sessions (Milestone 4)."
       />
       <div className="mb-6 rounded-xl border border-[#D4AF37]/40 bg-[#D4AF37]/10 p-4 text-sm text-[#E8F0EE]">
         Live screen / camera / microphone require explicit OS + browser consent at use time. A
@@ -72,7 +74,7 @@ export default async function RemoteAccessPage() {
               const milestone = SCOPE_MILESTONE[scope];
               const deviceName =
                 data.devices.find((d) => d.id === grant?.device_id)?.name ?? "a device you were granted access to";
-              const liveNow = milestone === 3;
+              const liveNow = milestone <= 4;
               return (
                 <Card key={scope}>
                   <div className="flex items-start justify-between gap-2">
@@ -89,7 +91,7 @@ export default async function RemoteAccessPage() {
                           ? activeSessions.length > 0
                             ? "Live in sessions — join one from Live sessions above to start sharing."
                             : "Disconnected — no live session right now. Join an active session above to start sharing."
-                          : "Disconnected — no live media yet. Arrives in Milestone 4."}
+                          : "Disconnected — no live media yet."}
                     </span>
                   </div>
                   {grant && (
@@ -106,10 +108,11 @@ export default async function RemoteAccessPage() {
                     {granted && grant && (
                       <RevokePermissionButton permissionId={grant.id} scope={SCOPE_LABELS[scope]} />
                     )}
-                    {milestone > 3 && (
+                    {milestone > 4 && (
                       <Badge tone="gold">Live in Milestone {milestone}</Badge>
                     )}
-                    {liveNow && <Badge tone="green">Live in Milestone 3</Badge>}
+                    {milestone === 3 && <Badge tone="green">Live in Milestone 3</Badge>}
+                    {milestone === 4 && <Badge tone="green">Live in Milestone 4</Badge>}
                   </div>
                 </Card>
               );

@@ -8,9 +8,10 @@
  *   - the ICE configuration (public Google STUN only — there is NO
  *     TURN server, see the note below),
  *   - the "nexvora-control" data-channel message format + validation
- *     (mute state, track started/stopped, kill-switch — the channel
- *     Milestone 4 will extend for file transfer / location / remote
- *     interaction),
+ *     (mute state, track started/stopped, kill-switch — extended in
+ *     Milestone 4 for file-transfer metadata, location, remote
+ *     interaction, and notifications; binary file bytes use the
+ *     separate "nexvora-file" channel, lib/file-transfer.ts),
  *   - the live-session phase state machine,
  *   - poll backoff (never a tight loop),
  *   - the grant model for publishing tracks: a side may only publish
@@ -28,6 +29,13 @@
  * stop/revoke instantly.
  */
 import type { PermissionScope } from "./permissions";
+import { MAX_FILE_SIZE_BYTES, validateFileName } from "./file-transfer";
+import {
+  validateDeviceNotification,
+  validateLocationFix,
+  validateRemoteKeyEvent,
+  validateRemotePointerEvent,
+} from "./live-features";
 
 /* ------------------------------------------------------------------ */
 /* ICE servers — STUN only, NO TURN                                    */
@@ -106,17 +114,59 @@ export function canPlayRemoteAudio(
   return grantedScopes.includes("speaker");
 }
 
+/**
+ * Milestone 4 gating — same rule for all four: the owner may always
+ * (they own the device — and the browser/OS still asks them explicitly
+ * at use time); a participant needs the live scope of the same name.
+ * The caller passes the scopes the server page computed as valid —
+ * the client never decides grant validity itself.
+ */
+export function canTransferFiles(
+  grantedScopes: readonly PermissionScope[],
+  isOwner: boolean,
+): boolean {
+  if (isOwner) return true;
+  return grantedScopes.includes("file_transfer");
+}
+
+export function canShareLocation(
+  grantedScopes: readonly PermissionScope[],
+  isOwner: boolean,
+): boolean {
+  if (isOwner) return true;
+  return grantedScopes.includes("location");
+}
+
+export function canUseRemoteInteraction(
+  grantedScopes: readonly PermissionScope[],
+  isOwner: boolean,
+): boolean {
+  if (isOwner) return true;
+  return grantedScopes.includes("remote_interaction");
+}
+
+export function canShareNotifications(
+  grantedScopes: readonly PermissionScope[],
+  isOwner: boolean,
+): boolean {
+  if (isOwner) return true;
+  return grantedScopes.includes("notifications");
+}
+
 /* ------------------------------------------------------------------ */
 /* "nexvora-control" data channel (Milestone 4 extends this)          */
 /* ------------------------------------------------------------------ */
 
 /**
- * The single data channel on the peer connection. Created by the
+ * The single control channel on the peer connection. Created by the
  * offerer (the participant) and received by the answerer (the owner)
- * via `ondatachannel`. It carries only small control messages —
- * never media, never file content. Milestone 4 will extend this same
- * channel for file transfer / location / remote interaction; no
- * second channel is planned.
+ * via `ondatachannel`. It carries only small JSON control messages —
+ * never media, never file bytes. Milestone 4 extends it for file
+ * transfer metadata (offer/approve/reject/cancel/complete), location,
+ * remote interaction, and notifications. Binary file bytes are the
+ * one exception: they use the dedicated "nexvora-file" channel
+ * (lib/file-transfer.ts) so a stalled transfer can never delay a
+ * kill-switch or any other control message.
  */
 export const CONTROL_CHANNEL_NAME = "nexvora-control";
 
@@ -152,17 +202,175 @@ export interface KillSwitchMessage {
   type: "kill-switch";
 }
 
+/* ------------------------------------------------------------------ */
+/* Milestone 4 control messages                                        */
+/*                                                                     */
+/* File-transfer METADATA, location, remote interaction and            */
+/* notifications all travel over this same "nexvora-control"          */
+/* channel as small JSON messages. Binary file bytes are the ONLY     */
+/* thing that does not: they use the dedicated "nexvora-file"         */
+/* channel (lib/file-transfer.ts) so a stalled transfer can never     */
+/* delay a kill-switch, a mute state, or an interaction stop.         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * File offer: the sender's per-file approval request. `transferId`
+ * is the server-issued `file_transfers` row id (the sender creates
+ * the metadata row via the API first, so the receiver can trust the
+ * id is recorded). No bytes flow until the receiver answers with
+ * `file-approve`. The receiver re-checks the declared size against
+ * the 50 MB limit — a peer that lies about size is rejected here
+ * before anything is downloaded.
+ */
+export interface FileOfferMessage {
+  type: "file-offer";
+  transferId: string;
+  fileName: string;
+  fileSizeBytes: number;
+}
+
+export interface FileApproveMessage {
+  type: "file-approve";
+  transferId: string;
+}
+
+export interface FileRejectMessage {
+  type: "file-reject";
+  transferId: string;
+}
+
+export interface FileCancelMessage {
+  type: "file-cancel";
+  transferId: string;
+}
+
+/** The receiver assembled every chunk: the transfer is complete. */
+export interface FileCompleteMessage {
+  type: "file-complete";
+  transferId: string;
+}
+
+/**
+ * Location sharing. `location-start` / `location-stop` bracket the
+ * session; `location-update` carries one validated fix (latitude /
+ * longitude / accuracy / timestamp). Sharing starts ONLY from an
+ * explicit button click + the browser Geolocation prompt, and only
+ * under a live `location` grant — never silently, never in the
+ * background.
+ */
+export interface LocationStartMessage {
+  type: "location-start";
+}
+
+export interface LocationStopMessage {
+  type: "location-stop";
+}
+
+export interface LocationUpdateMessage {
+  type: "location-update";
+  latitude: number;
+  longitude: number;
+  accuracy: number | null;
+  timestamp: number;
+}
+
+/**
+ * Remote interaction (in-page ONLY — a browser cannot synthesize
+ * OS-level input on the remote device). `interaction-start` is the
+ * controlled side explicitly allowing it; `interaction-stop` is
+ * either side ending it instantly (the owner's one-tap kill-switch
+ * for interaction). `interaction-pointer` carries a normalised
+ * pointer position / click on the shared view, rendered as a remote
+ * cursor overlay; `interaction-key` carries a key the participant
+ * pressed while focused on the shared view, shown as a visible log
+ * entry on the controlled side — never injected anywhere.
+ */
+export interface InteractionStartMessage {
+  type: "interaction-start";
+}
+
+export interface InteractionStopMessage {
+  type: "interaction-stop";
+}
+
+export interface InteractionPointerMessage {
+  type: "interaction-pointer";
+  kind: "move" | "click";
+  x: number;
+  y: number;
+}
+
+export interface InteractionKeyMessage {
+  type: "interaction-key";
+  key: string;
+}
+
+/**
+ * Notification feed. `notification-sharing-start` / `-stop` bracket
+ * sharing from a real reporting device; `notification` carries one
+ * validated notification (app / title / body / receivedAt). The web
+ * side NEVER sends these — browsers cannot capture OS notifications
+ * — so the feed populates only from a real reporting device
+ * (Android NotificationListenerService, Milestone 6). No notification
+ * data is faked anywhere.
+ */
+export interface NotificationSharingStartMessage {
+  type: "notification-sharing-start";
+}
+
+export interface NotificationSharingStopMessage {
+  type: "notification-sharing-stop";
+}
+
+export interface NotificationMessage {
+  type: "notification";
+  app: string;
+  title: string;
+  body: string;
+  receivedAt: number;
+}
+
 export type ControlMessage =
   | MuteStateMessage
   | TrackStartedMessage
   | TrackStoppedMessage
-  | KillSwitchMessage;
+  | KillSwitchMessage
+  | FileOfferMessage
+  | FileApproveMessage
+  | FileRejectMessage
+  | FileCancelMessage
+  | FileCompleteMessage
+  | LocationStartMessage
+  | LocationStopMessage
+  | LocationUpdateMessage
+  | InteractionStartMessage
+  | InteractionStopMessage
+  | InteractionPointerMessage
+  | InteractionKeyMessage
+  | NotificationSharingStartMessage
+  | NotificationSharingStopMessage
+  | NotificationMessage;
 
 export const CONTROL_MESSAGE_TYPES = [
   "mute-state",
   "track-started",
   "track-stopped",
   "kill-switch",
+  "file-offer",
+  "file-approve",
+  "file-reject",
+  "file-cancel",
+  "file-complete",
+  "location-start",
+  "location-stop",
+  "location-update",
+  "interaction-start",
+  "interaction-stop",
+  "interaction-pointer",
+  "interaction-key",
+  "notification-sharing-start",
+  "notification-sharing-stop",
+  "notification",
 ] as const;
 
 /**
@@ -191,6 +399,65 @@ export function parseControlMessage(value: unknown): ControlMessage | null {
       };
     case "kill-switch":
       return { type: "kill-switch" };
+    case "file-offer": {
+      if (typeof msg.transferId !== "string" || !msg.transferId) return null;
+      // The receiver never trusts a client-supplied path: only a
+      // validated bare name is accepted (same rule as the server).
+      const name = validateFileName(msg.fileName);
+      if (!name.ok) return null;
+      if (
+        typeof msg.fileSizeBytes !== "number" ||
+        !Number.isSafeInteger(msg.fileSizeBytes) ||
+        msg.fileSizeBytes <= 0 ||
+        msg.fileSizeBytes > MAX_FILE_SIZE_BYTES
+      ) {
+        return null;
+      }
+      return {
+        type: "file-offer",
+        transferId: msg.transferId,
+        fileName: name.name,
+        fileSizeBytes: msg.fileSizeBytes,
+      };
+    }
+    case "file-approve":
+    case "file-reject":
+    case "file-cancel":
+    case "file-complete":
+      if (typeof msg.transferId !== "string" || !msg.transferId) return null;
+      return { type: msg.type, transferId: msg.transferId };
+    case "location-start":
+      return { type: "location-start" };
+    case "location-stop":
+      return { type: "location-stop" };
+    case "location-update": {
+      const fix = validateLocationFix(msg);
+      if (!fix) return null;
+      return { type: "location-update", ...fix };
+    }
+    case "interaction-start":
+      return { type: "interaction-start" };
+    case "interaction-stop":
+      return { type: "interaction-stop" };
+    case "interaction-pointer": {
+      const pointer = validateRemotePointerEvent(msg);
+      if (!pointer) return null;
+      return { type: "interaction-pointer", ...pointer };
+    }
+    case "interaction-key": {
+      const key = validateRemoteKeyEvent(msg);
+      if (!key) return null;
+      return { type: "interaction-key", ...key };
+    }
+    case "notification-sharing-start":
+      return { type: "notification-sharing-start" };
+    case "notification-sharing-stop":
+      return { type: "notification-sharing-stop" };
+    case "notification": {
+      const notification = validateDeviceNotification(msg);
+      if (!notification) return null;
+      return { type: "notification", ...notification };
+    }
     default:
       return null;
   }

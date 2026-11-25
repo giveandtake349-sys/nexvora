@@ -20,11 +20,20 @@ export const dynamic = "force-dynamic";
  * Server-side checks here: the caller must be a party of the session
  * (owner or participant) and the session must still be active. The
  * granted media scopes are computed server-side from valid grants —
- * the owner implicitly holds all four on their own device; a
+ * the owner implicitly holds all eight on their own device; a
  * participant gets only the scopes with a live, unrevoked, unexpired
  * grant. The client never decides grant validity.
  */
 const MEDIA_SCOPES: PermissionScope[] = ["screen", "camera", "microphone", "speaker"];
+/** Milestone 4 scopes, live in the same session (file transfer /
+ *  location / remote interaction / notifications). */
+const MILESTONE_4_SCOPES: PermissionScope[] = [
+  "file_transfer",
+  "location",
+  "remote_interaction",
+  "notifications",
+];
+const LIVE_SCOPES: PermissionScope[] = [...MEDIA_SCOPES, ...MILESTONE_4_SCOPES];
 
 export default async function LiveSessionPage({
   params,
@@ -116,8 +125,8 @@ export default async function LiveSessionPage({
   const device = data.devices.find((d) => d.id === session.device_id);
   const deviceName = device?.name ?? "Remote device";
   const grantedScopes: PermissionScope[] = isOwner
-    ? [...MEDIA_SCOPES]
-    : MEDIA_SCOPES.filter((scope) => {
+    ? [...LIVE_SCOPES]
+    : LIVE_SCOPES.filter((scope) => {
         const grant = data.grantedToMe.find(
           (g) => g.device_id === session.device_id && g.scope === scope,
         );

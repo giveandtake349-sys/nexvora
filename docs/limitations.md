@@ -1,17 +1,17 @@
-# NEXVORA — Known Limitations (Milestones 1–3)
+# NEXVORA — Known Limitations (Milestones 1–4)
 
 ## What is NOT built yet
 
-- **No file transfer, location sharing, or remote interaction.** Milestone 4.
-  The `file_transfers` table and RLS policies exist already; the transfer
-  flow and its storage (deferred to Milestone 4 — no Storage bucket exists
-  yet in the Neon setup) do not.
 - **No native Android app.** Milestone 6. The schema carries a `platform`
   field (`web` | `android` | `ios` | `desktop`) so Android trusted-device
   authorization can be added later, subject to Android's permission and
-  background-execution restrictions.
+  background-execution restrictions. Android is also the capture route
+  for real notification data (NotificationListenerService) — the web
+  notification feed stays empty until a real reporting device exists.
+- **No TURN server** (see below) and no file storage bucket: files are
+  peer-to-peer only by design, never stored server-side.
 
-## What IS built now (Milestones 2–3)
+## What IS built now (Milestones 2–4)
 
 - **WebRTC signaling** (Milestone 2): DB-backed, short-polled
   offer/answer/ICE over `/api/sessions/[id]/signal`, with per-party
@@ -25,6 +25,18 @@
   call test, the screen-share OS dialog test, and the revoke-mid-call
   test are still pending (no browser / no Neon access from the build
   VM). See `MILESTONE-3-REPORT.md`.
+- **File transfer / location / remote interaction / notification feed**
+  (Milestone 4): in the same live session — chunked file transfer over
+  a dedicated `nexvora-file` data channel with per-file owner approval
+  and a 50 MB limit; location sharing via the browser Geolocation
+  prompt (explicit start, both-side indicator); in-page-only remote
+  interaction (remote cursor overlay + click/key forwarding, instant
+  kill-switch); a notification feed fed only by a real reporting
+  device. Live-verified? **Not yet** — the two-browser transfer test,
+  the location prompt test, the interaction kill-switch test, and the
+  notification-feed test with a real reporting device are still pending
+  (no browser / no Neon access from the build VM). See
+  `MILESTONE-4-REPORT.md`.
 
 ## Live-media limitations (Milestone 3, honest)
 
@@ -65,11 +77,22 @@
   separate permissions and are treated separately throughout.
 - **Location** requires the browser geolocation permission and only reports
   while sharing is active.
-- **Remote interaction** in a browser is limited to what web APIs allow
-  (e.g. scrolling a shared page, clicking through a co-browsing layer).
-  Real remote control of a device needs the native Android app (Milestone 6)
-  and Android's accessibility / device-admin APIs, which the user must
-  explicitly enable.
+- **Remote interaction** in a browser is limited to what web APIs allow:
+  a remote-cursor overlay plus click/key forwarding to the shared view
+  (Milestone 4). Real remote control of a device needs the native
+  Android app (Milestone 6) and Android's accessibility / device-admin
+  APIs, which the user must explicitly enable. Milestone 4 never
+  presents the in-page interaction as OS-level control.
+- **Notifications:** web browsers cannot capture OS notifications, so
+  the web side sends no notification data and the feed stays empty
+  until a real reporting device (Android NotificationListenerService,
+  Milestone 6, owner opts in on their own phone) sends validated
+  notification messages. No notification data is faked.
+- **File transfer:** 50 MB max per file, 16 KiB chunks, one transfer at
+  a time per side in the UI, peer-to-peer only (no server storage, no
+  resume after a dropped connection — a failed transfer must be
+  re-offered). The receiver must approve every file; the sender's
+  declared size is re-checked by the receiver and the server.
 - **Online/offline status** is derived from `last_seen_at` heartbeats
   (online = seen in the last 5 minutes). It is not a live socket presence
   signal in Milestone 1.

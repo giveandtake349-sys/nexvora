@@ -1,14 +1,21 @@
 # NEXVORA — ONE ECOSYSTEM. EVERY DEVICE.
 
 Premium remote device access and management platform.
-**Milestone 3 (this repo state):** brand foundation, landing page, authentication,
+**Milestone 4 (this repo state):** brand foundation, landing page, authentication,
 database, device registration, secure pairing, approval and revocation,
-DB-backed WebRTC signaling (Milestone 2), and live screen / camera /
-microphone / speaker over WebRTC (Milestone 3).
+DB-backed WebRTC signaling (Milestone 2), live screen / camera /
+microphone / speaker over WebRTC (Milestone 3), and file transfer /
+location sharing / remote interaction / notification feed in live
+sessions (Milestone 4).
 
-> File transfer / location / remote interaction (Milestone 4) are **not**
-> built yet. The Remote Access workspace shows them as Disconnected /
-> "Coming in Milestone 4" — never as active.
+> File transfer / location / remote interaction / notifications are
+> **live in Milestone 4** — in the same live session as screen /
+> camera / mic. Each needs its own live grant, and each shows a
+> visible indicator while active. Honest limits still apply: remote
+> interaction is in-page only (a browser cannot synthesize OS-level
+> input), and the web side sends no notification data (browsers cannot
+> capture OS notifications) — see "How Milestone 4 works" below and
+> `docs/limitations.md`.
 
 ## Stack
 
@@ -85,6 +92,13 @@ In the Neon dashboard → SQL Editor (or with `psql` against
    `signaling_state` and per-party heartbeat columns on
    `remote_sessions`, forced RLS on the new table. Run it after 0001,
    once, on the same database.
+3. `db/migrations/0003_file_transfers_update.sql` — Milestone 4: an
+   UPDATE policy on the existing `file_transfers` table (0001 created
+   it with SELECT + INSERT policies only) so the sender/receiver can
+   move a transfer through pending → approved → in_progress →
+   completed / rejected / failed, plus a session index. No new table,
+   no new column, no file bytes anywhere — files are peer-to-peer
+   only. Run it after 0002, once, on the same database.
 
 No new migration in Milestone 3: live media rides on the Milestone 2
 signaling tables (offer/answer/ICE/bye over the API) and on one WebRTC
@@ -141,14 +155,78 @@ initiator, so the handshake can never glare.
   sit behind symmetric NATs or restrictive firewalls; a TURN server is
   a future deployment item.
 - **Data channel:** one channel, `nexvora-control`, carries mute state,
-  track started/stopped, and the owner kill-switch. Milestone 4 will
-  extend this same channel for file transfer / location / remote
-  interaction — no second channel is planned.
+  track started/stopped, and the owner kill-switch. Milestone 4
+  extends this same channel for file-transfer metadata, location,
+  remote interaction, and notifications — binary file bytes are the
+  only exception, using a dedicated `nexvora-file` channel (see
+  "How Milestone 4 works" below).
 
 No stealth mode exists anywhere in this app: no hidden indicators, no
 silent screen capture, no bypass of OS consent. See `docs/limitations.md`
-and `MILESTONE-3-REPORT.md` for what is still unverified live (two-browser
-call test, screen-share OS dialog test, revoke-mid-call test).
+and `MILESTONE-4-REPORT.md` for what is still unverified live (two-browser
+transfer test, location prompt test, interaction kill-switch test,
+notification feed test with a real reporting device).
+
+## How Milestone 4 works
+
+All four features live in the same live session (`/dashboard/sessions/[id]`,
+`components/LiveSession.tsx`) and each needs its own live grant
+(`file_transfer` / `location` / `remote_interaction` / `notifications`;
+the owner is exempt on their own device). The server page computes the
+valid scopes; the client never decides grant validity.
+
+- **File transfer:** sender picks a file → the client validates the bare
+  file name (no paths) and the 50 MB size limit → `POST
+  /api/sessions/[id]/file-transfers` records metadata (name, size,
+  sender, receiver, `pending`) → the sender offers the metadata over
+  `nexvora-control` (`file-offer`) → the receiver approves or rejects
+  → only after approval do 16 KiB binary chunks flow over the
+  dedicated `nexvora-file` data channel (4-byte chunk-index header,
+  backpressure at 256 KiB buffered, progress shown on both sides) →
+  the receiver assembles the Blob and gets a Download link; both sides
+  update the server row (`approved` / `in_progress` / `completed` /
+  `rejected` / `failed`) via `PATCH .../file-transfers/[transferId]`,
+  which enforces the state machine and who may perform each transition.
+  Files are peer-to-peer only — the server never stores file bytes.
+  Why a second channel: binary framing + backpressure differ from JSON
+  control messages, and a stalled transfer must never delay a
+  kill-switch or mute message.
+- **Location sharing:** the owner presses **Share my location** →
+  the browser Geolocation prompt appears (denial is a silent no-op
+  with an honest message) → fixes are sent over `nexvora-control`
+  (`location-start` / `location-update` / `location-stop`, throttled
+  to one update per 5s) only while a live `location` grant holds →
+  the viewer sees the latest coordinates + timestamp + an
+  OpenStreetMap link (no map API key), and a "sharing location"
+  indicator shows on BOTH sides. Stop is one tap; start/stop are
+  audit-logged.
+- **Remote interaction (in-page only):** the controlled side presses
+  **Allow remote interaction on my view** (explicit opt-in) → the
+  other side's pointer over the remote screen sends normalised
+  `interaction-pointer` events (move/click) and `interaction-key`
+  events → the controlled side sees a remote-cursor overlay on its
+  shared view and a visible log of keys received. **Honest limit:** a
+  browser cannot synthesize OS-level input on the remote device — this
+  is a cursor overlay + event forwarding to the shared view, never
+  full OS remote control. The controlled side ends it instantly with
+  **Kill interaction now** (`interaction-stop` over the control
+  channel); the session itself keeps running.
+- **Notification feed:** the reporting device announces
+  `notification-sharing-start`, then sends validated `notification`
+  messages (`{ app, title, body, receivedAt }`, size-capped) over
+  `nexvora-control`; the viewer sees them in a feed (max 50, newest
+  first) with a "notification sharing active" indicator. **Honest
+  limit:** web browsers cannot capture OS notifications, so the web
+  side has NO "send notification" button and sends no notification
+  data — the feed populates only from a real reporting device
+  (Android NotificationListenerService is a Milestone 6 capture
+  route). No notification data is faked anywhere.
+- **Audit:** location / notification sharing start-stop and
+  interaction start/stop/kill are written via `POST
+  /api/sessions/[id]/events` (allowlisted actions only, details
+  capped at 2 KiB, scope-checked server-side) to `session_events`
+  (+ `security_events` for starts), visible in the Security Center.
+  File-transfer lifecycle events are written by the transfer routes.
 
 ## How the Trusted Device system works
 
@@ -200,17 +278,22 @@ app/                  Routes: landing, auth pages, dashboard pages, /api/*
   api/sessions/       disconnect one, disconnect all
   api/profile/        update display name
   api/sessions/       disconnect one, disconnect all, start / signal /
-                      heartbeat / state (Milestone 2 signaling)
+                      heartbeat / state (Milestone 2 signaling),
+                      file-transfers + events (Milestone 4)
 components/           ui.tsx (brand system), DashboardShell, AuthForms, DashboardActions,
-                      LiveSession (Milestone 3 live call view)
+                      LiveSession (Milestone 3 live call view + Milestone 4 panels)
 lib/                  db/ (Neon pool + config), auth/ (Neon Auth server/client/session),
                       permissions, pairing, rate-limit, device helpers,
                       audit logging, API auth helper, signaling (M2 helpers),
                       signaling-client (M3 browser signaling client),
                       webrtc (M3 pure WebRTC rules: ICE, control channel,
-                      phase machine, grant model)
+                      phase machine, grant model — extended in M4),
+                      file-transfer (M4: chunking, framing, state machine,
+                      name/size validation), live-features (M4: location,
+                      notification feed, remote interaction, audit actions)
   __tests__/          Vitest unit tests
-db/migrations/        0001_init.sql (10 tables + forced RLS)
+db/migrations/        0001_init.sql (10 tables + forced RLS),
+                      0002_signaling.sql (M2), 0003_file_transfers_update.sql (M4)
 db/seed.sql           Demo data only — never run on production
 docs/limitations.md   Browser limits + Android future work
 ```

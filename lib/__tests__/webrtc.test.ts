@@ -14,11 +14,16 @@ import {
   RTC_CONFIGURATION,
   canPlayRemoteAudio,
   canPublishTrack,
+  canShareLocation,
+  canShareNotifications,
+  canTransferFiles,
+  canUseRemoteInteraction,
   iceConfigHasTurn,
   nextPollDelayMs,
   parseControlMessage,
   transitionLivePhase,
 } from "../webrtc";
+import { FILE_CHANNEL_NAME } from "../file-transfer";
 
 describe("ICE servers — STUN only, no TURN", () => {
   it("uses only the public Google STUN server", () => {
@@ -82,6 +87,140 @@ describe("control-channel message validation", () => {
     expect(parseControlMessage("mute-state")).toBeNull();
     expect(parseControlMessage([])).toBeNull();
     expect(parseControlMessage({})).toBeNull();
+  });
+
+  it("accepts Milestone 4 file-transfer metadata (offer/approve/reject/cancel/complete)", () => {
+    expect(
+      parseControlMessage({
+        type: "file-offer",
+        transferId: "t1",
+        fileName: "a.pdf",
+        fileSizeBytes: 1234,
+      }),
+    ).toEqual({ type: "file-offer", transferId: "t1", fileName: "a.pdf", fileSizeBytes: 1234 });
+    expect(parseControlMessage({ type: "file-approve", transferId: "t1" })).toEqual({
+      type: "file-approve",
+      transferId: "t1",
+    });
+    expect(parseControlMessage({ type: "file-reject", transferId: "t1" })).toEqual({
+      type: "file-reject",
+      transferId: "t1",
+    });
+    expect(parseControlMessage({ type: "file-cancel", transferId: "t1" })).toEqual({
+      type: "file-cancel",
+      transferId: "t1",
+    });
+    expect(parseControlMessage({ type: "file-complete", transferId: "t1" })).toEqual({
+      type: "file-complete",
+      transferId: "t1",
+    });
+    // The 50 MB limit is enforced here too — an oversize offer is dropped.
+    expect(
+      parseControlMessage({
+        type: "file-offer",
+        transferId: "t1",
+        fileName: "a.pdf",
+        fileSizeBytes: 50 * 1024 * 1024 + 1,
+      }),
+    ).toBeNull();
+    expect(
+      parseControlMessage({ type: "file-offer", transferId: "t1", fileName: "../x", fileSizeBytes: 1 }),
+    ).toBeNull(); // the receiver never trusts a client-supplied path
+    expect(parseControlMessage({ type: "file-offer", transferId: "", fileName: "a", fileSizeBytes: 1 })).toBeNull();
+    expect(parseControlMessage({ type: "file-approve" })).toBeNull();
+  });
+
+  it("accepts Milestone 4 location messages and rejects impossible fixes", () => {
+    expect(parseControlMessage({ type: "location-start" })).toEqual({ type: "location-start" });
+    expect(parseControlMessage({ type: "location-stop" })).toEqual({ type: "location-stop" });
+    expect(
+      parseControlMessage({
+        type: "location-update",
+        latitude: 24.7,
+        longitude: 46.6,
+        accuracy: 10,
+        timestamp: 1700000000000,
+      }),
+    ).toEqual({
+      type: "location-update",
+      latitude: 24.7,
+      longitude: 46.6,
+      accuracy: 10,
+      timestamp: 1700000000000,
+    });
+    expect(
+      parseControlMessage({ type: "location-update", latitude: 91, longitude: 0, timestamp: 1 }),
+    ).toBeNull();
+    expect(parseControlMessage({ type: "location-update", latitude: 0, longitude: 0 })).toBeNull();
+  });
+
+  it("accepts Milestone 4 interaction messages and rejects out-of-range pointers", () => {
+    expect(parseControlMessage({ type: "interaction-start" })).toEqual({
+      type: "interaction-start",
+    });
+    expect(parseControlMessage({ type: "interaction-stop" })).toEqual({
+      type: "interaction-stop",
+    });
+    expect(
+      parseControlMessage({ type: "interaction-pointer", kind: "click", x: 0.5, y: 0.5 }),
+    ).toEqual({ type: "interaction-pointer", kind: "click", x: 0.5, y: 0.5 });
+    expect(
+      parseControlMessage({ type: "interaction-pointer", kind: "move", x: 1.2, y: 0.5 }),
+    ).toBeNull();
+    expect(parseControlMessage({ type: "interaction-key", key: "Enter" })).toEqual({
+      type: "interaction-key",
+      key: "Enter",
+    });
+    expect(
+      parseControlMessage({ type: "interaction-key", key: "x".repeat(33) }),
+    ).toBeNull();
+  });
+
+  it("accepts Milestone 4 notification messages and rejects malformed ones", () => {
+    expect(parseControlMessage({ type: "notification-sharing-start" })).toEqual({
+      type: "notification-sharing-start",
+    });
+    expect(parseControlMessage({ type: "notification-sharing-stop" })).toEqual({
+      type: "notification-sharing-stop",
+    });
+    expect(
+      parseControlMessage({
+        type: "notification",
+        app: "Messenger",
+        title: "Ayesha",
+        body: "Hi",
+        receivedAt: 1700000000000,
+      }),
+    ).toEqual({
+      type: "notification",
+      app: "Messenger",
+      title: "Ayesha",
+      body: "Hi",
+      receivedAt: 1700000000000,
+    });
+    expect(
+      parseControlMessage({
+        type: "notification",
+        app: "Messenger",
+        title: "",
+        body: "Hi",
+        receivedAt: 1700000000000,
+      }),
+    ).toBeNull();
+    expect(
+      parseControlMessage({
+        type: "notification",
+        app: "Messenger",
+        title: "T",
+        body: "x".repeat(1001),
+        receivedAt: 1700000000000,
+      }),
+    ).toBeNull();
+  });
+
+  it("the file channel is a separate, named channel from the control channel", () => {
+    expect(FILE_CHANNEL_NAME).toBe("nexvora-file");
+    expect(FILE_CHANNEL_NAME).not.toBe(CONTROL_CHANNEL_NAME);
   });
 });
 
@@ -180,5 +319,18 @@ describe("grant model for publishing tracks", () => {
     expect(canPlayRemoteAudio(["speaker"], false)).toBe(true);
     expect(canPlayRemoteAudio([], true)).toBe(true);
     expect(canPlayRemoteAudio([], false)).toBe(false);
+  });
+
+  it("Milestone 4 features are gated on their own scope (owner exempt)", () => {
+    for (const fn of [canTransferFiles, canShareLocation, canUseRemoteInteraction, canShareNotifications]) {
+      expect(fn([], true)).toBe(true);
+      expect(fn([], false)).toBe(false);
+    }
+    expect(canTransferFiles(["file_transfer"], false)).toBe(true);
+    expect(canTransferFiles(["location"], false)).toBe(false);
+    expect(canShareLocation(["location"], false)).toBe(true);
+    expect(canUseRemoteInteraction(["remote_interaction"], false)).toBe(true);
+    expect(canShareNotifications(["notifications"], false)).toBe(true);
+    expect(canShareNotifications(["file_transfer"], false)).toBe(false);
   });
 });

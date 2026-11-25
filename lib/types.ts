@@ -117,6 +117,20 @@ export interface SignalingMessage {
   created_at: string;
 }
 
+export interface FileTransfer {
+  id: string;
+  session_id: string | null;
+  sender_user_id: string;
+  receiver_user_id: string;
+  device_id: string | null;
+  file_name: string;
+  file_size_bytes: number;
+  storage_path: string | null;
+  status: "pending" | "approved" | "in_progress" | "completed" | "rejected" | "failed";
+  created_at: string;
+  completed_at: string | null;
+}
+
 export interface SecurityEvent {
   id: string;
   user_id: string | null;
