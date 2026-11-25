@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-nexvora-bg: #080d12;
+  --color-nexvora-surface: #0d141b;
+  --color-nexvora-surface-2: #111b24;
+  --color-nexvora-accent: #00e5a8;
+  --color-nexvora-gold: #d4af37;
+  --color-nexvora-text: #e8f0ee;
+  --color-nexvora-muted: #8fa3a0;
+  --color-nexvora-border: #1e2d38;
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+:root {
+  --background: #080d12;
+  --foreground: #e8f0ee;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Glass effect used across dashboard cards */
+.glass {
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
+  border: 1px solid #1e2d38;
+  backdrop-filter: blur(12px);
+}
+
+.glow-accent {
+  box-shadow: 0 0 24px rgba(0, 229, 168, 0.18);
+}
