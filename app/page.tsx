@@ -36,6 +36,14 @@ export default function Home() {
       <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
         <Wordmark />
         <nav className="flex items-center gap-3">
+          <a
+            href="https://drive.google.com/file/d/1LWUCQ4DzV5dYArnd9lohyjWaffO2Q8Gs/view?usp=drivesdk"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors bg-transparent text-[#E8F0EE] border border-[#1E2D38] hover:border-[#00E5A8] hover:text-[#00E5A8]"
+          >
+            Download App
+          </a>
           <Button variant="ghost" href="/login">
             Sign in
           </Button>
@@ -61,7 +69,19 @@ export default function Home() {
             <Button href="/dashboard" variant="outline" className="px-6 py-3 text-base">
               Open dashboard
             </Button>
+            <a
+              href="https://drive.google.com/file/d/1LWUCQ4DzV5dYArnd9lohyjWaffO2Q8Gs/view?usp=drivesdk"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center justify-center gap-2 rounded-lg px-6 py-3 text-base font-semibold transition-colors bg-[#00E5A8] text-[#080D12] hover:bg-[#33ecb8]"
+            >
+              Download App
+            </a>
           </div>
+          <p className="mt-4 text-sm text-[#8FA3A0]">
+            Android APK · v0.1.0 · Direct install — Play Store coming soon.
+            Live screen &amp; camera sharing arrive in the next update.
+          </p>
           {!configured && (
             <p className="mx-auto mt-6 max-w-xl rounded-xl border border-[#D4AF37]/40 bg-[#D4AF37]/10 px-4 py-3 text-sm text-[#E8F0EE]">
               Demo mode: no Neon project is configured yet, so sign-in and
