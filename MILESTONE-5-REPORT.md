@@ -322,22 +322,37 @@ data. **No new migration** — no hardening fix required one.
 
 ## 7. Consolidated LIVE-VERIFICATION CHECKLIST (M2–M5 — still needs a browser + live Neon)
 
-Do these in order, against the Neon project with migrations applied.
-Nothing here has been run yet — the build VM cannot reach Neon and
-has no browser.
+Do these in order, against the Neon project with migrations applied
+(the migrations are done — see A1/A2; the live-browser items below
+have not been run yet). Nothing in sections B–D has been run yet —
+the build VM cannot reach Neon and has no browser.
 
 ### A. Migrations (do first)
 
-- [ ] **A1.** Apply `db/migrations/0002_signaling.sql` in the Neon
+> **UPDATE Nov 25 17:05–17:08 (after this report's first push):**
+> migrations 0002 + 0003 were applied live in the Neon SQL Editor
+> with 0 errors, per the project record — 0002 created the
+> `signaling_messages` table + sequence, `signaling_state` and
+> heartbeat columns, the 9th `notifications` scope in the CHECK, and
+> forced RLS + 2 policies (backfill set 1 live test session to
+> `signaling_state='live'`); 0003 added the session index + UPDATE
+> policy on `file_transfers`. Verified by query at the time: table
+> exists, RLS on, 3 new columns, CHECK lists all 9 scopes, 5
+> policies present. This agent did **not** verify the application
+> itself (no Neon access from the build VM) — A1/A2 below are
+> recorded as done on the strength of that record, and A3 still
+> stands as a useful confirmation run.
+
+- [x] **A1.** Apply `db/migrations/0002_signaling.sql` in the Neon
   SQL Editor (or `psql` against `DATABASE_URL_UNPOOLED`), AFTER
   0001 (already applied). Verifies: `signaling_messages` table +
   sequence, `signaling_state` + heartbeat columns, forced RLS.
   Backfill marks pre-existing `status='active'` sessions
-  `signaling_state='live'`.
-- [ ] **A2.** Apply `db/migrations/0003_file_transfers_update.sql`
+  `signaling_state='live'`. **Done live Nov 25 17:05–17:08.**
+- [x] **A2.** Apply `db/migrations/0003_file_transfers_update.sql`
   after 0002. Verifies: UPDATE policy on `file_transfers` (sender/
   receiver can move pending → approved → in_progress → completed /
-  rejected / failed) + session index.
+  rejected / failed) + session index. **Done live Nov 25 17:05–17:08.**
 - [ ] **A3.** Run the integration tests against a throwaway Neon
   branch: `NEXVORA_TEST_DATABASE_URL=<branch-url> npm test --
   db.integration` (signaling table/policies, seq ordering, RLS
@@ -417,5 +432,9 @@ has no browser.
 ## 8. Push
 
 Pushed to GitHub `giveandtake349-sys/nexvora`, branch `main`, via
-the snapshot-push procedure. Commit SHA: _see parent report / sync
-record_ (filled in after the provider confirms success).
+the snapshot-push procedure. Commit SHA:
+`ef5084920989ac363de38a549cb67878e0dd5a02` (Milestone 5). A follow-up
+amendment commit (this report's §7 migration update + matching
+README / limitations lines, after migrations 0002 + 0003 were
+applied live) is recorded in the sync record alongside it — see the
+sync record for its SHA.

@@ -20,7 +20,11 @@
   no new migration. See `MILESTONE-5-REPORT.md` — the live
   verification checklist there is still open (migrations 0002 +
   0003 need live application; two-browser live tests need a
-  browser + live Neon).
+  live tests need a
+  browser + live Neon). Migrations 0002 + 0003 were applied live in
+  the Neon SQL Editor on Nov 25 17:05–17:08 (see
+  `MILESTONE-5-REPORT.md` §7) — the remaining live work is the
+  two-browser tests, not the migrations.
 
 - **WebRTC signaling** (Milestone 2): DB-backed, short-polled
   offer/answer/ICE over `/api/sessions/[id]/signal`, with per-party

@@ -277,8 +277,10 @@ valid scopes; the client never decides grant validity.
 - **Verification:** `npm run build`, `npm run lint`, `npm test`
   (142 tests) and a local production smoke test all pass — see
   `MILESTONE-5-REPORT.md` for the full output and the consolidated
-  live-verification checklist (migrations 0002 + 0003 still need live
-  application; two-browser live tests still need a browser + live Neon).
+  live-verification checklist. Note: migrations 0002 + 0003 were
+  applied live in the Neon SQL Editor on Nov 25 17:05–17:08 (see
+  `MILESTONE-5-REPORT.md` §7); two-browser live tests still need a
+  browser + live Neon.
 
 ## How the Trusted Device system works
 
