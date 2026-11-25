@@ -148,7 +148,7 @@ export default function Home() {
               </a>
             </div>
             <p className="mt-4 text-sm text-[#8FA3A0]">
-              Android APK · v0.1.0-m6-step3 · Direct install — Play Store coming soon.
+              Android APK · v0.1.0-m6-step4 · Direct install — Play Store coming soon.
             </p>
             {!configured && (
               <p className="mx-auto mt-6 max-w-xl rounded-xl border border-[#D4AF37]/40 bg-[#D4AF37]/10 px-4 py-3 text-sm text-[#E8F0EE] lg:mx-0">
