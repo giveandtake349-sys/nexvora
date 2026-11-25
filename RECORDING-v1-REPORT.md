@@ -61,11 +61,21 @@ record the remote stream of a live session and replay it in-app.
 
 ## Live verification detail (events route)
 
-Verified with the documented test accounts (e2e-alice / e2e-bob,
-password TestPass123!) on a FRESH session created for this check
-only — the user's live session a49e23f5 and test session 0837bce4
-were not touched. [Filled in after the check — see the final
-verification section below.]
+Verified Nov 25 ~20:40 +03 with the documented test accounts
+(e2e-alice / e2e-bob) on a FRESH session created for this check only
+(session 33d70551, bob granted `screen` only) — the user's live
+session a49e23f5 and test session 0837bce4 were not touched, and both
+test devices created for the check were deleted afterwards (grants
+revoked, session ended). All 14 checks passed:
+- sign-in alice/bob 200; device creates 201; pairing
+  generate/redeem 201; approve 200.
+- bob (non-owner, live `screen` grant) POST recording.started → 200
+  (exercises the new any-media path); recording.stopped → 200.
+- alice (owner, exempt) POST recording.started → 200.
+- bogus action recording.bogus → 400 (allowlist still enforced).
+- signed-out POST → 401.
+- homepage 200; /dashboard/recordings signed-out → 307 to /login.
+- cleanup: both test devices deleted (200).
 
 ## Not verified (needs real devices)
 
